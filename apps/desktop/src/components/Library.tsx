@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
-import { pickAudiobookFolder, scanAudiobookFolder } from "../lib/tauri-fs";
+import { pickAudiobookFolder, scanAudiobookFolder, extractCoverArt } from "../lib/tauri-fs";
 import type { LocalAudiobook } from "./AppShell";
 import { LinkingDialog } from "./LinkingDialog";
 
@@ -11,6 +11,46 @@ interface LibraryProps {
   onSelectBook: (book: LocalAudiobook) => void;
   onRemoveBook: (book: LocalAudiobook) => void;
   onDisconnect: () => void;
+}
+
+function BookThumbnail({ book }: { book: LocalAudiobook }) {
+  const [artUrl, setArtUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    extractCoverArt(book.folderPath, book.chapters).then((url) => {
+      if (!cancelled) setArtUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [book.folderPath, book.chapters]);
+
+  if (artUrl) {
+    return (
+      <img
+        src={artUrl}
+        alt=""
+        className="flex-shrink-0 w-12 h-12 rounded-md object-cover"
+      />
+    );
+  }
+
+  return (
+    <div className="flex-shrink-0 w-12 h-12 rounded-md bg-primary/10 flex items-center justify-center">
+      <svg
+        className="h-6 w-6 text-primary"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={1.5}
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
+        />
+      </svg>
+    </div>
+  );
 }
 
 export function Library({
@@ -104,21 +144,7 @@ export function Library({
                 className="group w-full text-left rounded-lg border border-border bg-card p-4 hover:border-primary/50 hover:shadow-sm transition-all"
               >
                 <div className="flex items-center gap-3">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-md bg-primary/10 flex items-center justify-center">
-                    <svg
-                      className="h-6 w-6 text-primary"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
-                      />
-                    </svg>
-                  </div>
+                  <BookThumbnail book={book} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">
                       {book.name}

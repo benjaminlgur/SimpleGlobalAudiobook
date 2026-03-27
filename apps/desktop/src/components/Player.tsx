@@ -6,6 +6,7 @@ import { SyncEngine } from "@audiobook/shared";
 import type { SyncState, SyncStatus } from "@audiobook/shared";
 import type { LocalAudiobook } from "./AppShell";
 import { formatTime, formatTimeRemaining } from "../lib/utils";
+import { extractCoverArt } from "../lib/tauri-fs";
 import { SyncIndicator } from "./SyncIndicator";
 import { ChaptersDrawer } from "./ChaptersDrawer";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -220,6 +221,16 @@ function PlayerInner({
   onPlay,
   onManualSync,
 }: PlayerInnerProps) {
+  const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    extractCoverArt(book.folderPath, book.chapters).then((url) => {
+      if (!cancelled) setCoverArtUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [book.folderPath, book.chapters]);
+
   const [playerState, controls] = useAudioPlayer({
     folderPath: book.folderPath,
     chapters: book.chapters,
@@ -269,26 +280,34 @@ function PlayerInner({
 
       {/* Cover art area */}
       <div className="flex-1 flex items-center justify-center px-8 py-4">
-        <div className="w-full max-w-[280px] aspect-square rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border border-border flex items-center justify-center shadow-lg">
-          <div className="text-center space-y-2">
-            <svg
-              className="mx-auto h-16 w-16 text-primary/60"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
-              />
-            </svg>
-            <p className="text-sm font-medium text-primary/80 px-4 truncate">
-              {book.name}
-            </p>
+        {coverArtUrl ? (
+          <img
+            src={coverArtUrl}
+            alt={`${book.name} cover`}
+            className="w-full max-w-[280px] aspect-square rounded-xl object-cover shadow-lg border border-border"
+          />
+        ) : (
+          <div className="w-full max-w-[280px] aspect-square rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border border-border flex items-center justify-center shadow-lg">
+            <div className="text-center space-y-2">
+              <svg
+                className="mx-auto h-16 w-16 text-primary/60"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25"
+                />
+              </svg>
+              <p className="text-sm font-medium text-primary/80 px-4 truncate">
+                {book.name}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Chapter label */}

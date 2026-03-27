@@ -104,3 +104,51 @@ export function revokeCurrentAudioBlob() {
     currentBlobUrl = null;
   }
 }
+
+const coverArtCache = new Map<string, string | null>();
+
+export async function extractCoverArt(
+  folderPath: string,
+  chapters: ChapterInfo[]
+): Promise<string | null> {
+  const cacheKey = folderPath;
+  if (coverArtCache.has(cacheKey)) return coverArtCache.get(cacheKey)!;
+
+  for (const chapter of chapters) {
+    try {
+      const ext = chapter.filename.split(".").pop()?.toLowerCase();
+      if (ext !== "mp3" && ext !== "m4a" && ext !== "m4b") continue;
+
+      const fullPath = joinPath(folderPath, chapter.filename);
+      const headerSize = 512 * 1024;
+      const data = await readFile(fullPath);
+      const buf = data.length > headerSize ? data.slice(0, headerSize) : data;
+
+      const { parseBuffer } = await import("music-metadata");
+      const metadata = await parseBuffer(buf, {
+        mimeType: MIME_TYPES[ext!] || "audio/mpeg",
+        size: data.length,
+      });
+
+      const pic = metadata.common.picture?.[0];
+      if (pic) {
+        const blob = new Blob([new Uint8Array(pic.data)], { type: pic.format });
+        const url = URL.createObjectURL(blob);
+        coverArtCache.set(cacheKey, url);
+        return url;
+      }
+    } catch {
+      // try next chapter
+    }
+  }
+
+  coverArtCache.set(cacheKey, null);
+  return null;
+}
+
+export function clearCoverArtCache() {
+  for (const url of coverArtCache.values()) {
+    if (url) URL.revokeObjectURL(url);
+  }
+  coverArtCache.clear();
+}
