@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { useState, useEffect, createContext, useContext, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import "../index";
 import "../global.css";
 
 SplashScreen.preventAutoHideAsync();

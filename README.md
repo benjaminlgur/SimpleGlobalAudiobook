@@ -62,7 +62,7 @@ npx expo run:android
 ## Usage
 
 1. On first launch, enter your Convex deployment URL (e.g., `https://your-project-123.convex.cloud`)
-2. Add audiobook folders (desktop) or audio files (mobile) to your library
+2. Add audiobook folders (desktop) or select a folder / M4B file on mobile to build your library
 3. Play audiobooks — your position syncs automatically across all connected devices
 4. Works offline — position is saved locally and synced when you're back online
 

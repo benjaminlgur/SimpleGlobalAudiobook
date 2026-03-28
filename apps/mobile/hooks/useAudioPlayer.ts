@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Platform } from "react-native";
 import TrackPlayer, {
   State,
+  Event,
   usePlaybackState,
   useProgress,
-  useActiveTrack,
+  useTrackPlayerEvents,
   Capability,
   AppKilledPlaybackBehavior,
 } from "react-native-track-player";
@@ -36,31 +38,36 @@ let isSetup = false;
 async function setupPlayer() {
   if (isSetup) return;
   try {
-    await TrackPlayer.setupPlayer({
-      autoHandleInterruptions: true,
-    });
-    await TrackPlayer.updateOptions({
-      android: {
-        appKilledPlaybackBehavior:
-          AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
-      },
-      capabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.SkipToNext,
-        Capability.SkipToPrevious,
-        Capability.JumpForward,
-        Capability.JumpBackward,
-        Capability.SeekTo,
-      ],
-      compactCapabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.SkipToNext,
-      ],
-      forwardJumpInterval: 30,
-      backwardJumpInterval: 30,
-    });
+    await TrackPlayer.setupPlayer();
+    // RNTP v3 notification internals crash on newer Android versions due
+    // dynamic receiver export flags. Skip updateOptions there for stability.
+    const isNotificationOptionsSafe =
+      Platform.OS !== "android" || Number(Platform.Version) < 34;
+
+    if (isNotificationOptionsSafe) {
+      await TrackPlayer.updateOptions({
+        android: {
+          appKilledPlaybackBehavior:
+            AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+        },
+        capabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.SkipToNext,
+          Capability.SkipToPrevious,
+          Capability.JumpForward,
+          Capability.JumpBackward,
+          Capability.SeekTo,
+        ],
+        compactCapabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.SkipToNext,
+        ],
+        forwardJumpInterval: 30,
+        backwardJumpInterval: 30,
+      });
+    }
     isSetup = true;
   } catch {
     isSetup = true;
@@ -101,7 +108,7 @@ export function useMobileAudioPlayer(
   const [ready, setReady] = useState(false);
   const playbackState = usePlaybackState();
   const progress = useProgress(250);
-  const activeTrack = useActiveTrack();
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const positionCallbackRef = useRef(onPositionUpdate);
   positionCallbackRef.current = onPositionUpdate;
   const chapterChangeRef = useRef(onChapterChange);
@@ -150,6 +157,11 @@ export function useMobileAudioPlayer(
           if (initialPositionMs > 0) {
             await TrackPlayer.seekTo(initialPositionMs / 1000);
           }
+
+          const currentTrack = await TrackPlayer.getCurrentTrack();
+          if (mounted && currentTrack !== null) {
+            setCurrentTrackIndex(currentTrack);
+          }
         }
 
         if (mounted) setReady(true);
@@ -167,6 +179,13 @@ export function useMobileAudioPlayer(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useTrackPlayerEvents([Event.PlaybackTrackChanged], (event) => {
+    if (virtual) return;
+    if (typeof event.nextTrack !== "number" || event.nextTrack < 0) return;
+    setCurrentTrackIndex(event.nextTrack);
+    chapterChangeRef.current?.(event.nextTrack);
+  });
 
   // Position update + virtual chapter boundary detection
   useEffect(() => {
@@ -195,22 +214,17 @@ export function useMobileAudioPlayer(
 
       positionCallbackRef.current?.(virtualIdxRef.current, posMs);
     } else {
-      const currentIndex = activeTrack
-        ? parseInt(activeTrack.id?.replace("chapter-", "") || "0")
-        : 0;
-      positionCallbackRef.current?.(currentIndex, progress.position * 1000);
+      positionCallbackRef.current?.(currentTrackIndex, progress.position * 1000);
     }
-  }, [progress.position, activeTrack, ready, virtual, chapters]);
+  }, [progress.position, ready, virtual, chapters, currentTrackIndex]);
 
   const currentChapterIndex = virtual
     ? virtualChapterIdx
-    : activeTrack
-      ? parseInt(activeTrack.id?.replace("chapter-", "") || "0")
-      : 0;
+    : currentTrackIndex;
 
   const isPlaying =
-    playbackState.state === State.Playing ||
-    playbackState.state === State.Buffering;
+    playbackState === State.Playing ||
+    playbackState === State.Buffering;
 
   let positionMs: number;
   let durationMs: number;
@@ -224,9 +238,7 @@ export function useMobileAudioPlayer(
     durationMs = progress.duration * 1000;
   }
 
-  const playbackError = playbackState.state === State.Error
-    ? "Playback error — audio files may be unavailable"
-    : null;
+  const playbackError = null;
 
   const state: MobilePlayerState = {
     isPlaying,
@@ -234,7 +246,7 @@ export function useMobileAudioPlayer(
     positionMs,
     durationMs,
     playbackSpeed: speed,
-    isLoading: !ready || playbackState.state === State.Buffering,
+    isLoading: !ready || playbackState === State.Buffering || playbackState === State.Connecting,
     error: loadError || playbackError,
   };
 
@@ -250,8 +262,8 @@ export function useMobileAudioPlayer(
     }, [onPause]),
 
     togglePlayPause: useCallback(async () => {
-      const st = await TrackPlayer.getPlaybackState();
-      if (st.state === State.Playing) {
+      const st = await TrackPlayer.getState();
+      if (st === State.Playing) {
         await TrackPlayer.pause();
         onPause?.();
       } else {
@@ -303,7 +315,6 @@ export function useMobileAudioPlayer(
           if (seekMs && seekMs > 0) {
             await TrackPlayer.seekTo(seekMs / 1000);
           }
-          onChapterChange?.(index);
         }
       },
       [virtual, chapters, onChapterChange]
@@ -322,11 +333,6 @@ export function useMobileAudioPlayer(
       } else {
         try {
           await TrackPlayer.skipToNext();
-          const track = await TrackPlayer.getActiveTrack();
-          if (track) {
-            const idx = parseInt(track.id?.replace("chapter-", "") || "0");
-            onChapterChange?.(idx);
-          }
         } catch {
           // No next track
         }
@@ -346,11 +352,6 @@ export function useMobileAudioPlayer(
       } else {
         try {
           await TrackPlayer.skipToPrevious();
-          const track = await TrackPlayer.getActiveTrack();
-          if (track) {
-            const idx = parseInt(track.id?.replace("chapter-", "") || "0");
-            onChapterChange?.(idx);
-          }
         } catch {
           // No previous track
         }

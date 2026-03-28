@@ -5,6 +5,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation } from "convex/react";
@@ -28,9 +29,45 @@ interface LocalAudiobook extends AudiobookMeta {
   missing?: boolean;
 }
 
+interface PickedAudioFile {
+  uri: string;
+  name: string;
+  size: number;
+}
+
 function isAudioFile(name: string): boolean {
   const lower = name.toLowerCase();
   return AUDIO_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+function decodeUriValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function getNameFromUri(uri: string): string {
+  const withoutQuery = uri.split("?")[0] ?? uri;
+  const lastSegment = withoutQuery.substring(withoutQuery.lastIndexOf("/") + 1);
+  const decoded = decodeUriValue(lastSegment);
+  const afterColon = decoded.includes(":")
+    ? decoded.substring(decoded.lastIndexOf(":") + 1)
+    : decoded;
+  return afterColon.includes("/")
+    ? afterColon.substring(afterColon.lastIndexOf("/") + 1)
+    : afterColon;
+}
+
+function getFolderNameFromUri(uri: string): string | null {
+  const decoded = decodeUriValue(uri);
+  const lastSegment = decoded.substring(decoded.lastIndexOf("/") + 1);
+  const afterColon = lastSegment.includes(":")
+    ? lastSegment.substring(lastSegment.lastIndexOf(":") + 1)
+    : lastSegment;
+  const name = afterColon.split("/").filter(Boolean).pop();
+  return name || null;
 }
 
 export default function LibraryScreen() {
@@ -73,18 +110,62 @@ export default function LibraryScreen() {
   const handlePickFolder = async () => {
     setIsScanning(true);
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: "audio/*",
-        multiple: true,
-      });
+      let audioFiles: PickedAudioFile[] = [];
+      let folderNameHint: string | null = null;
 
-      if (result.canceled || !result.assets || result.assets.length === 0)
-        return;
+      if (Platform.OS === "android") {
+        const permission =
+          await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
 
-      const assets = result.assets;
-      const audioFiles = assets.filter((a) => isAudioFile(a.name));
+        if (!permission.granted) return;
+
+        folderNameHint = getFolderNameFromUri(permission.directoryUri);
+        const entryUris =
+          await FileSystem.StorageAccessFramework.readDirectoryAsync(
+            permission.directoryUri
+          );
+
+        const scanned = await Promise.all(
+          entryUris.map(async (uri): Promise<PickedAudioFile | null> => {
+            try {
+              const name = getNameFromUri(uri);
+              if (!isAudioFile(name)) return null;
+
+              const info = await FileSystem.getInfoAsync(uri, { size: true });
+              if (!info.exists || info.isDirectory) return null;
+
+              return {
+                uri,
+                name,
+                size: info.size || 0,
+              };
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        audioFiles = scanned.filter((file): file is PickedAudioFile => !!file);
+      } else {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: "audio/*",
+          multiple: true,
+        });
+
+        if (result.canceled || !result.assets || result.assets.length === 0)
+          return;
+
+        audioFiles = result.assets
+          .filter((asset) => isAudioFile(asset.name))
+          .map((asset) => ({
+            uri: asset.uri,
+            name: asset.name,
+            size: asset.size || 0,
+          }));
+      }
+
       if (audioFiles.length === 0) {
-        Alert.alert("No Audio Files", "No audio files found in selection.");
+        Alert.alert("No Audio Files", "No audio files found in selected folder.");
         return;
       }
 
@@ -103,6 +184,7 @@ export default function LibraryScreen() {
       }));
 
       const folderName =
+        folderNameHint ||
         audioFiles[0].name.replace(/\.[^/.]+$/, "").split(" - ")[0] ||
         "Audiobook";
 
