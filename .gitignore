@@ -15,6 +15,10 @@ apps/mobile/.expo/
 apps/mobile/android/
 apps/mobile/ios/
 
+# Stray native projects if Expo is run from repo root (use: cd apps/mobile)
+/android/
+/ios/
+
 # Build artifacts
 *.tsbuildinfo
 

@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   FlatList,
   Modal,
+  Image,
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from "react-native";
@@ -16,6 +17,7 @@ import NetInfo from "@react-native-community/netinfo";
 import { SyncEngine } from "@audiobook/shared";
 import type { SyncState, SyncPushResult, AudiobookMeta, ChapterInfo } from "@audiobook/shared";
 import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
+import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
 
@@ -271,6 +273,7 @@ function PlayerInner({
   const [progressBarWidth, setProgressBarWidth] = useState(0);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [scrubPositionMs, setScrubPositionMs] = useState<number | null>(null);
+  const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
 
   const [playerState, controls] = useMobileAudioPlayer({
     fileUris,
@@ -287,6 +290,21 @@ function PlayerInner({
     controlsRef.current = controls;
     return () => { controlsRef.current = null; };
   }, [controls, controlsRef]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const art = await extractCoverArtFromAudioUris(fileUris);
+      if (!cancelled) {
+        setCoverArtUrl(art);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fileUris]);
 
   const currentChapter = book.chapters[playerState.currentChapterIndex];
   const chapterLabel =
@@ -398,19 +416,28 @@ function PlayerInner({
 
       {/* Cover Art */}
       <View className="flex-1 items-center justify-center px-8">
-        <View
-          className="w-64 h-64 rounded-2xl bg-orange-50 items-center justify-center"
-          style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
-        >
-          <Ionicons name="book" size={56} color="#f9731660" />
-          <Text
-            className="text-sm font-medium mt-2 px-4 text-center"
-            style={{ color: "#f97316aa" }}
-            numberOfLines={2}
+        {coverArtUrl ? (
+          <Image
+            source={{ uri: coverArtUrl }}
+            resizeMode="cover"
+            className="w-64 h-64 rounded-2xl"
+            style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
+          />
+        ) : (
+          <View
+            className="w-64 h-64 rounded-2xl bg-orange-50 items-center justify-center"
+            style={{ borderWidth: 1, borderColor: "#e5e7eb" }}
           >
-            {book.name}
-          </Text>
-        </View>
+            <Ionicons name="book" size={56} color="#f9731660" />
+            <Text
+              className="text-sm font-medium mt-2 px-4 text-center"
+              style={{ color: "#f97316aa" }}
+              numberOfLines={2}
+            >
+              {book.name}
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Error banner */}
