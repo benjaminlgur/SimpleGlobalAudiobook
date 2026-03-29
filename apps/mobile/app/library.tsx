@@ -26,7 +26,14 @@ import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 const LIBRARY_KEY = "audiobook_library";
 const DEVICE_ID_KEY = "audiobook_device_id";
 const AUDIO_EXTENSIONS = [
-  ".mp3", ".m4a", ".m4b", ".ogg", ".opus", ".flac", ".wav", ".aac",
+  ".mp3",
+  ".m4a",
+  ".m4b",
+  ".ogg",
+  ".opus",
+  ".flac",
+  ".wav",
+  ".aac",
 ];
 
 interface LocalAudiobook extends AudiobookMeta {
@@ -144,7 +151,7 @@ export default function LibraryScreen() {
   const removeFromDatabase = useMutation(api.audiobooks.remove);
   const remoteOnlyBooks = useQuery(
     api.audiobooks.listRemoteForDevice,
-    deviceId ? { deviceId, refreshToken } : "skip"
+    deviceId ? { deviceId, refreshToken } : "skip",
   );
   const remoteOnlyCount = remoteOnlyBooks?.length ?? 0;
 
@@ -179,7 +186,7 @@ export default function LibraryScreen() {
             } catch {
               return { ...book, missing: true };
             }
-          })
+          }),
         );
         setLibrary(validated);
       } catch {
@@ -216,13 +223,13 @@ export default function LibraryScreen() {
           } catch {
             // Keep local library as-is while offline or if request fails.
           }
-        })
+        }),
       );
 
       if (missingKeys.size === 0 || cancelled) return;
 
       const updated = library.filter(
-        (book) => !missingKeys.has(`${book.name}::${book.checksum}`)
+        (book) => !missingKeys.has(`${book.name}::${book.checksum}`),
       );
       await saveLibrary(updated);
     };
@@ -298,7 +305,7 @@ export default function LibraryScreen() {
         folderNameHint = getFolderNameFromUri(permission.directoryUri);
         const entryUris =
           await FileSystem.StorageAccessFramework.readDirectoryAsync(
-            permission.directoryUri
+            permission.directoryUri,
           );
 
         const scanned = await Promise.all(
@@ -318,7 +325,7 @@ export default function LibraryScreen() {
             } catch {
               return null;
             }
-          })
+          }),
         );
 
         audioFiles = scanned.filter((file): file is PickedAudioFile => !!file);
@@ -341,7 +348,10 @@ export default function LibraryScreen() {
       }
 
       if (audioFiles.length === 0) {
-        Alert.alert("No Audio Files", "No audio files found in selected folder.");
+        Alert.alert(
+          "No Audio Files",
+          "No audio files found in selected folder.",
+        );
         return;
       }
 
@@ -372,7 +382,7 @@ export default function LibraryScreen() {
       };
 
       const existing = library.find(
-        (b) => b.name === meta.name && b.checksum === meta.checksum
+        (b) => b.name === meta.name && b.checksum === meta.checksum,
       );
       if (existing) {
         router.push({
@@ -424,21 +434,28 @@ export default function LibraryScreen() {
       const asset = result.assets[0];
       const ext = asset.name.split(".").pop()?.toLowerCase();
       if (ext !== "m4b" && ext !== "m4a") {
-        Alert.alert("Invalid File", "Please select an M4B or M4A audiobook file.");
+        Alert.alert(
+          "Invalid File",
+          "Please select an M4B or M4A audiobook file.",
+        );
         return;
       }
 
       const bookName = asset.name.replace(/\.[^/.]+$/, "");
-      const fileInfos: FileInfo[] = [{ name: asset.name, size: asset.size || 0 }];
+      const fileInfos: FileInfo[] = [
+        { name: asset.name, size: asset.size || 0 },
+      ];
       const checksum = computeChecksum(fileInfos);
 
-      const chapters: ChapterInfo[] = [{
-        index: 0,
-        filename: asset.name,
-        title: bookName,
-        startMs: 0,
-        endMs: undefined,
-      }];
+      const chapters: ChapterInfo[] = [
+        {
+          index: 0,
+          filename: asset.name,
+          title: bookName,
+          startMs: 0,
+          endMs: undefined,
+        },
+      ];
 
       const meta: LocalAudiobook = {
         name: bookName,
@@ -448,7 +465,7 @@ export default function LibraryScreen() {
       };
 
       const existing = library.find(
-        (b) => b.name === meta.name && b.checksum === meta.checksum
+        (b) => b.name === meta.name && b.checksum === meta.checksum,
       );
       if (existing) {
         router.push({
@@ -505,7 +522,7 @@ export default function LibraryScreen() {
           }
 
           const updated = library.filter(
-            (b) => !(b.name === book.name && b.checksum === book.checksum)
+            (b) => !(b.name === book.name && b.checksum === book.checksum),
           );
           await saveLibrary(updated);
         },
@@ -528,7 +545,7 @@ export default function LibraryScreen() {
   return (
     <View className="flex-1 bg-white">
       {/* Header */}
-      <View className="px-4 pt-14 pb-3 flex-row items-center justify-between border-b border-gray-200">
+      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between border-b border-gray-200">
         <Text className="text-xl font-bold text-gray-900">Library</Text>
         <TouchableOpacity onPress={handleDisconnect}>
           <Text className="text-xs text-gray-500">Disconnect</Text>
@@ -568,8 +585,12 @@ export default function LibraryScreen() {
                     `The audio files for "${book.name}" can no longer be found. They may have been moved or deleted.\n\nPlease re-add the audiobook from its new location.`,
                     [
                       { text: "OK", style: "cancel" },
-                      { text: "Remove", style: "destructive", onPress: () => handleRemove(book) },
-                    ]
+                      {
+                        text: "Remove",
+                        style: "destructive",
+                        onPress: () => handleRemove(book),
+                      },
+                    ],
                   );
                   return;
                 }
@@ -584,8 +605,15 @@ export default function LibraryScreen() {
                 if (book.convexId) {
                   Alert.alert(book.name, "Choose an action", [
                     { text: "Cancel", style: "cancel" },
-                    { text: "Link/Unlink", onPress: () => setLinkingBook(book) },
-                    { text: "Remove", style: "destructive", onPress: () => handleRemove(book) },
+                    {
+                      text: "Link/Unlink",
+                      onPress: () => setLinkingBook(book),
+                    },
+                    {
+                      text: "Remove",
+                      style: "destructive",
+                      onPress: () => handleRemove(book),
+                    },
                   ]);
                 } else {
                   handleRemove(book);
@@ -643,32 +671,33 @@ export default function LibraryScreen() {
                 style={{ borderColor: "#e0e7ff", backgroundColor: "#f5f7ff" }}
               >
                 <View className="flex-row items-center">
-                <View
-                  className="w-12 h-12 rounded-lg items-center justify-center mr-3"
-                  style={{ backgroundColor: "#eef2ff" }}
-                >
-                  <Ionicons name="cloud-outline" size={24} color="#818cf8" />
-                </View>
-                <View className="flex-1">
-                  <Text
-                    className="text-sm font-medium"
-                    style={{ color: "#6b7280" }}
-                    numberOfLines={1}
+                  <View
+                    className="w-12 h-12 rounded-lg items-center justify-center mr-3"
+                    style={{ backgroundColor: "#eef2ff" }}
                   >
-                    {book.name}
-                  </Text>
-                  <Text className="text-xs" style={{ color: "#9ca3af" }}>
-                    {book.chapters.length} chapter
-                    {book.chapters.length !== 1 ? "s" : ""} · Add local files to listen
-                  </Text>
-                </View>
+                    <Ionicons name="cloud-outline" size={24} color="#818cf8" />
+                  </View>
+                  <View className="flex-1">
+                    <Text
+                      className="text-sm font-medium"
+                      style={{ color: "#6b7280" }}
+                      numberOfLines={1}
+                    >
+                      {book.name}
+                    </Text>
+                    <Text className="text-xs" style={{ color: "#9ca3af" }}>
+                      {book.chapters.length} chapter
+                      {book.chapters.length !== 1 ? "s" : ""} · Add local files
+                      to listen
+                    </Text>
+                  </View>
                 </View>
                 <View className="flex-row mt-3" style={{ marginLeft: 60 }}>
                   <TouchableOpacity
                     onPress={() =>
                       Alert.alert(
                         "Not on this device",
-                        `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`
+                        `"${book.name}" was added on another device. To listen here, add the same audio files using the buttons below.`,
                       )
                     }
                     className="px-3 py-1.5 rounded-md border mr-2"
@@ -694,12 +723,12 @@ export default function LibraryScreen() {
                               } catch {
                                 Alert.alert(
                                   "Unable to remove",
-                                  "Couldn't remove this audiobook from the database right now."
+                                  "Couldn't remove this audiobook from the database right now.",
                                 );
                               }
                             },
                           },
-                        ]
+                        ],
                       )
                     }
                     className="px-3 py-1.5 rounded-md border"
@@ -728,7 +757,9 @@ export default function LibraryScreen() {
       <View className="p-4 border-t border-gray-200">
         {isScanning ? (
           <View className="bg-gray-200 rounded-xl py-3.5 items-center">
-            <Text className="text-gray-500 font-medium text-sm">Scanning...</Text>
+            <Text className="text-gray-500 font-medium text-sm">
+              Scanning...
+            </Text>
           </View>
         ) : (
           <View className="flex-row gap-2">

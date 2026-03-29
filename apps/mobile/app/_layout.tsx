@@ -91,7 +91,12 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: "#fff" },
           }}
         />
-        <StatusBar style="auto" />
+        <StatusBar
+          style="dark"
+          hidden={false}
+          translucent={false}
+          backgroundColor="#ffffff"
+        />
       </ConvexContext.Provider>
     </MaybeConvexProvider>
   );
