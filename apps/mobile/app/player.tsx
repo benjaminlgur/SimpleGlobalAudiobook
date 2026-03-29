@@ -386,7 +386,7 @@ function PlayerInner({
   return (
     <View className="flex-1 bg-white dark:bg-gray-950">
       {/* Header */}
-      <View className="px-4 pt-14 pb-3 flex-row items-center justify-between">
+      <View className="px-4 pt-2 pb-3 flex-row items-center justify-between">
         <TouchableOpacity
           onPress={onBack}
           className="flex-row items-center"
