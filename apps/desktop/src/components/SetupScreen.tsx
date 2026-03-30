@@ -51,7 +51,7 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-foreground">
-            Audiobook Player
+            Simple Syncing Audiobook
           </h1>
           <p className="text-sm text-muted-foreground">
             Connect to your Convex deployment to sync your audiobook progress

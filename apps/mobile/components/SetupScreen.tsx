@@ -43,7 +43,7 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
         <View className="items-center mb-8">
           <Ionicons name="book" size={56} color="#f97316" />
           <Text className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-4">
-            Audiobook Player
+            Simple Syncing Audiobook
           </Text>
           <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center">
             Connect to your Convex deployment to sync your audiobook progress

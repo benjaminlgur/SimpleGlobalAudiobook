@@ -1,6 +1,6 @@
-# Simple Global Audiobook Player
+# Simple Syncing Audiobook
 
-A multiplatform audiobook player that syncs your listening position across devices using Convex.
+Simple Syncing Audiobook is a multiplatform app that syncs your listening position across devices using Convex.
 
 ## Architecture
 
@@ -79,3 +79,42 @@ npx expo run:android
 Audiobooks are automatically matched across devices by folder name + file checksum.
 If auto-matching fails (different encodings, etc.), you can manually link audiobooks
 from the library view.
+
+## For Maintainers
+
+### Creating a Release
+
+A GitHub Actions workflow automatically builds desktop installers (Windows, macOS, Linux) and the Android APK when a version tag is pushed. To create a release:
+
+```bash
+./scripts/bump-version.sh 1.0.0
+```
+
+This single command:
+
+1. Updates the version in `package.json`, `apps/desktop/src-tauri/tauri.conf.json`, and `apps/mobile/app.json`
+2. Commits the version bump
+3. Creates a git tag (`v1.0.0`)
+4. Pushes the commit and tag to GitHub
+
+The tag push triggers the release workflow, which builds and uploads:
+
+| Platform | Artifacts |
+|---|---|
+| Windows | `.msi`, `.exe` (NSIS installer) |
+| macOS (Apple Silicon) | `.dmg` |
+| macOS (Intel) | `.dmg` |
+| Linux | `.deb`, `.AppImage`, `.rpm` |
+| Android | `.apk` |
+
+Once builds finish, a **draft release** appears on the [Releases page](https://github.com/benjaminlgur/SimpleGlobalAudiobook/releases). Review it, edit the notes if needed, and click **Publish**.
+
+### Deploying the Backend
+
+To deploy Convex functions and schema to production:
+
+```bash
+npx convex deploy
+```
+
+Do this before tagging a release if there are backend changes.

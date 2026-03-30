@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "Audiobook Player",
-    "slug": "audiobook-player",
+    "name": "Simple Syncing Audiobook",
+    "slug": "simple-syncing-audiobook",
     "version": "1.0.0",
     "orientation": "portrait",
-    "scheme": "audiobook-player",
+    "scheme": "simple-syncing-audiobook",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#f97316"
       },
-      "package": "com.audiobook.player"
+      "package": "com.simplesyncing.audiobook"
     },
     "plugins": [
       "expo-router",
       "expo-document-picker"
     ],
     "ios": {
-      "bundleIdentifier": "com.audiobook.player"
+      "bundleIdentifier": "com.simplesyncing.audiobook"
     }
   }
 }
