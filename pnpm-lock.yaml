@@ -169,6 +169,9 @@ importers:
       react-native-track-player:
         specifier: 4.1.2
         version: 4.1.2(react-native@0.76.9(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(react@18.3.1))(react@18.3.1)
+      scheduler:
+        specifier: 0.24.0-canary-efb381bbf-20230505
+        version: 0.24.0-canary-efb381bbf-20230505
       tailwindcss:
         specifier: ^3.4.0
         version: 3.4.19

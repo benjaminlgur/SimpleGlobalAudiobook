@@ -506,30 +506,35 @@ export default function LibraryScreen() {
   };
 
   const handleRemove = (book: LocalAudiobook) => {
-    Alert.alert("Remove Audiobook", `Remove "${book.name}" from library?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Remove",
-        style: "destructive",
-        onPress: async () => {
-          if (deviceId && book.convexId) {
-            try {
-              await removeFromDevice({
-                audiobookId: book.convexId as Id<"audiobooks">,
-                deviceId,
-              });
-            } catch {
-              // Keep local remove responsive if network is unavailable.
+    Alert.alert(
+      "Remove Audiobook",
+      `Remove "${book.name}" from library?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            if (deviceId && book.convexId) {
+              try {
+                await removeFromDevice({
+                  audiobookId: book.convexId as Id<"audiobooks">,
+                  deviceId,
+                });
+              } catch {
+                // Keep local remove responsive if network is unavailable.
+              }
             }
-          }
 
-          const updated = library.filter(
-            (b) => !(b.name === book.name && b.checksum === book.checksum),
-          );
-          await saveLibrary(updated);
+            const updated = library.filter(
+              (b) => !(b.name === book.name && b.checksum === book.checksum),
+            );
+            await saveLibrary(updated);
+          },
         },
-      },
-    ]);
+      ],
+      { cancelable: true },
+    );
   };
 
   const handleRefresh = useCallback(async () => {
@@ -588,6 +593,7 @@ export default function LibraryScreen() {
                         onPress: () => handleRemove(book),
                       },
                     ],
+                    { cancelable: true },
                   );
                   return;
                 }
@@ -600,18 +606,23 @@ export default function LibraryScreen() {
               }}
               onLongPress={() => {
                 if (book.convexId) {
-                  Alert.alert(book.name, "Choose an action", [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Link/Unlink",
-                      onPress: () => setLinkingBook(book),
-                    },
-                    {
-                      text: "Remove",
-                      style: "destructive",
-                      onPress: () => handleRemove(book),
-                    },
-                  ]);
+                  Alert.alert(
+                    book.name,
+                    "Choose an action",
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Link/Unlink",
+                        onPress: () => setLinkingBook(book),
+                      },
+                      {
+                        text: "Remove",
+                        style: "destructive",
+                        onPress: () => handleRemove(book),
+                      },
+                    ],
+                    { cancelable: true },
+                  );
                 } else {
                   handleRemove(book);
                 }
@@ -723,6 +734,7 @@ export default function LibraryScreen() {
                             },
                           },
                         ],
+                        { cancelable: true },
                       )
                     }
                     className="px-3 py-1.5 rounded-md border border-red-300 dark:border-red-900"
