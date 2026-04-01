@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { useConvex } from "convex/react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useConvex, useQuery } from "convex/react";
 import { Library } from "./Library";
 import { Player } from "./Player";
 import { Settings } from "./Settings";
@@ -7,6 +7,8 @@ import type { AudiobookMeta } from "@audiobook/shared";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { checkPathExists } from "../lib/tauri-fs";
+import { useConnectionMode } from "../App";
+import { getScopedStorageKey, getStorageScope } from "../lib/storageScope";
 
 interface AppShellProps {
   convexUrl: string;
@@ -21,51 +23,221 @@ export interface LocalAudiobook extends AudiobookMeta {
 const LIBRARY_KEY = "audiobook_library";
 const DEVICE_ID_KEY = "audiobook_device_id";
 
-function loadLibrary(): LocalAudiobook[] {
+function readLibraryFromStorage(storageKey: string): LocalAudiobook[] {
   try {
-    const stored = localStorage.getItem(LIBRARY_KEY);
+    const stored = localStorage.getItem(storageKey);
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
   }
 }
 
-function saveLibrary(books: LocalAudiobook[]) {
-  const toSave = books.map(({ missing: _, ...rest }) => rest);
-  localStorage.setItem(LIBRARY_KEY, JSON.stringify(toSave));
+function decodeUriValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
-function getOrCreateDeviceId() {
-  const existing = localStorage.getItem(DEVICE_ID_KEY);
+function getHostedScopeMigrationMatch(scope: string): {
+  keyPrefix: string;
+  userMarker: string;
+} | null {
+  if (!scope.startsWith("hosted:")) {
+    return null;
+  }
+
+  const [, encodedUrl, encodedUserId] = scope.split(":");
+  if (!encodedUrl || !encodedUserId) {
+    return null;
+  }
+
+  const userId = decodeUriValue(encodedUserId);
+  return {
+    keyPrefix: `hosted:${encodedUrl}:`,
+    userMarker: `%7C${userId}%7C`,
+  };
+}
+
+function findLegacyHostedScopedKey(baseKey: string, scope: string): string | null {
+  const match = getHostedScopeMigrationMatch(scope);
+  if (!match) {
+    return null;
+  }
+
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (
+      key &&
+      key.startsWith(`${baseKey}:${match.keyPrefix}`) &&
+      key.includes(match.userMarker)
+    ) {
+      return key;
+    }
+  }
+
+  return null;
+}
+
+function loadLibrary(
+  storageKey: string,
+  storageScope: string,
+  legacyKey?: string
+): LocalAudiobook[] {
+  const stored = localStorage.getItem(storageKey);
+  if (stored !== null) {
+    return readLibraryFromStorage(storageKey);
+  }
+
+  const legacyHostedKey = findLegacyHostedScopedKey(LIBRARY_KEY, storageScope);
+  if (legacyHostedKey) {
+    const hostedBooks = readLibraryFromStorage(legacyHostedKey);
+    if (hostedBooks.length > 0) {
+      saveLibrary(storageKey, hostedBooks);
+    }
+    return hostedBooks;
+  }
+
+  if (!legacyKey) {
+    return [];
+  }
+
+  const legacyStored = localStorage.getItem(legacyKey);
+  if (legacyStored === null) {
+    return [];
+  }
+
+  const legacyBooks = readLibraryFromStorage(legacyKey);
+  if (legacyBooks.length > 0) {
+    saveLibrary(storageKey, legacyBooks);
+  }
+  return legacyBooks;
+}
+
+function saveLibrary(storageKey: string, books: LocalAudiobook[]) {
+  const toSave = books.map(({ missing: _, ...rest }) => rest);
+  localStorage.setItem(storageKey, JSON.stringify(toSave));
+}
+
+function isInvalidAudiobookIdError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("ArgumentValidationError") ||
+    error.message.includes('v.id("audiobooks")') ||
+    error.message.includes("does not match validator")
+  );
+}
+
+function getOrCreateDeviceId(
+  storageKey: string,
+  storageScope: string,
+  legacyKey?: string
+) {
+  const existing = localStorage.getItem(storageKey);
   if (existing) return existing;
+
+  const legacyHostedKey = findLegacyHostedScopedKey(DEVICE_ID_KEY, storageScope);
+  if (legacyHostedKey) {
+    const legacyHostedDeviceId = localStorage.getItem(legacyHostedKey);
+    if (legacyHostedDeviceId) {
+      localStorage.setItem(storageKey, legacyHostedDeviceId);
+      return legacyHostedDeviceId;
+    }
+  }
+
+  if (legacyKey) {
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy) {
+      localStorage.setItem(storageKey, legacy);
+      return legacy;
+    }
+  }
 
   const next = `desktop_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 10)}`;
-  localStorage.setItem(DEVICE_ID_KEY, next);
+  localStorage.setItem(storageKey, next);
   return next;
 }
 
 export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
   const convex = useConvex();
-  const [library, setLibrary] = useState<LocalAudiobook[]>(loadLibrary);
+  const mode = useConnectionMode();
+  const viewerScope = useQuery(
+    api.authState.viewerScope,
+    mode === "hosted" ? {} : "skip"
+  );
+  const storageScope = useMemo(
+    () =>
+      getStorageScope({
+        mode,
+        convexUrl,
+        userScope: mode === "hosted" ? viewerScope ?? null : null,
+      }),
+    [convexUrl, mode, viewerScope]
+  );
+  const libraryStorageKey = useMemo(
+    () =>
+      storageScope ? getScopedStorageKey(LIBRARY_KEY, storageScope) : null,
+    [storageScope]
+  );
+  const deviceStorageKey = useMemo(
+    () =>
+      storageScope ? getScopedStorageKey(DEVICE_ID_KEY, storageScope) : null,
+    [storageScope]
+  );
+  const legacyLibraryKey = mode === "self-hosted" ? LIBRARY_KEY : undefined;
+  const legacyDeviceKey = mode === "self-hosted" ? DEVICE_ID_KEY : undefined;
+  const [library, setLibrary] = useState<LocalAudiobook[]>([]);
   const [activeBook, setActiveBook] = useState<LocalAudiobook | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [deviceId] = useState<string>(getOrCreateDeviceId);
-
-  const validateLibraryPaths = useCallback(async (books: LocalAudiobook[]) => {
-    const validated = await Promise.all(
-      books.map(async (book) => {
-        const pathExists = await checkPathExists(book.folderPath);
-        return { ...book, missing: !pathExists };
-      })
-    );
-    setLibrary(validated);
-  }, []);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [storageReady, setStorageReady] = useState(false);
 
   useEffect(() => {
-    validateLibraryPaths(loadLibrary());
-  }, [validateLibraryPaths]);
+    if (!libraryStorageKey || !deviceStorageKey || !storageScope) {
+      setLibrary([]);
+      setActiveBook(null);
+      setDeviceId(null);
+      setStorageReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    setStorageReady(false);
+    setActiveBook(null);
+    setDeviceId(getOrCreateDeviceId(deviceStorageKey, storageScope, legacyDeviceKey));
+
+    const storedBooks = loadLibrary(
+      libraryStorageKey,
+      storageScope,
+      legacyLibraryKey
+    );
+
+    void (async () => {
+      const validated = await Promise.all(
+        storedBooks.map(async (book) => {
+          const pathExists = await checkPathExists(book.folderPath);
+          return { ...book, missing: !pathExists };
+        })
+      );
+
+      if (cancelled) return;
+      setLibrary(validated);
+      setStorageReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    deviceStorageKey,
+    legacyDeviceKey,
+    legacyLibraryKey,
+    libraryStorageKey,
+    storageScope,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +249,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
       if (booksWithConvexId.length === 0) return;
 
       const missingKeys = new Set<string>();
+      const invalidIdKeys = new Set<string>();
 
       await Promise.all(
         booksWithConvexId.map(async (book) => {
@@ -87,19 +260,27 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
             if (!doc) {
               missingKeys.add(`${book.name}::${book.checksum}`);
             }
-          } catch {
-            // Keep local library as-is while offline or if request fails.
+          } catch (error) {
+            if (isInvalidAudiobookIdError(error)) {
+              invalidIdKeys.add(`${book.name}::${book.checksum}`);
+            }
           }
         })
       );
 
-      if (missingKeys.size === 0 || cancelled) return;
+      if ((missingKeys.size === 0 && invalidIdKeys.size === 0) || cancelled) return;
 
-      const updated = library.filter(
-        (book) => !missingKeys.has(`${book.name}::${book.checksum}`)
-      );
+      const updated = library
+        .filter((book) => !missingKeys.has(`${book.name}::${book.checksum}`))
+        .map((book) =>
+          invalidIdKeys.has(`${book.name}::${book.checksum}`)
+            ? { ...book, convexId: undefined }
+            : book
+        );
       setLibrary(updated);
-      saveLibrary(updated);
+      if (libraryStorageKey) {
+        saveLibrary(libraryStorageKey, updated);
+      }
 
       if (
         activeBook &&
@@ -113,7 +294,17 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeBook, convex, library]);
+  }, [activeBook, convex, library, libraryStorageKey]);
+
+  const persistLibrary = useCallback(
+    (books: LocalAudiobook[]) => {
+      setLibrary(books);
+      if (libraryStorageKey) {
+        saveLibrary(libraryStorageKey, books);
+      }
+    },
+    [libraryStorageKey]
+  );
 
   const addBook = (book: LocalAudiobook) => {
     const existing = library.find(
@@ -124,8 +315,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
       return;
     }
     const updated = [...library, { ...book, missing: false }];
-    setLibrary(updated);
-    saveLibrary(updated);
+    persistLibrary(updated);
   };
 
   const updateBookConvexId = (book: LocalAudiobook, convexId: string) => {
@@ -134,8 +324,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
         ? { ...b, convexId }
         : b
     );
-    setLibrary(updated);
-    saveLibrary(updated);
+    persistLibrary(updated);
     if (
       activeBook &&
       activeBook.name === book.name &&
@@ -151,8 +340,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
         ? { ...b, folderPath: newFolderPath, missing: false }
         : b
     );
-    setLibrary(updated);
-    saveLibrary(updated);
+    persistLibrary(updated);
     if (
       activeBook &&
       activeBook.name === book.name &&
@@ -166,8 +354,7 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     const updated = library.filter(
       (b) => !(b.name === book.name && b.checksum === book.checksum)
     );
-    setLibrary(updated);
-    saveLibrary(updated);
+    persistLibrary(updated);
     if (
       activeBook &&
       activeBook.name === book.name &&
@@ -177,11 +364,22 @@ export function AppShell({ convexUrl, onDisconnect }: AppShellProps) {
     }
   };
 
+  if (!storageReady || !deviceId || !storageScope) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground text-sm">
+          Loading library...
+        </div>
+      </div>
+    );
+  }
+
   if (activeBook) {
     return (
       <Player
         book={activeBook}
         convexUrl={convexUrl}
+        storageScope={storageScope}
         onBack={() => setActiveBook(null)}
         onConvexIdResolved={(id) => updateBookConvexId(activeBook, id)}
         onRelocate={(newPath) => relocateBook(activeBook, newPath)}

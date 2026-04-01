@@ -74,6 +74,7 @@ export class SyncEngine {
     if (stored) {
       try {
         const position = JSON.parse(stored) as PlaybackPosition;
+        position.audiobookId = this.audiobookId;
         if (!position.updatedAt) position.updatedAt = Date.now();
         this.state.pending = position;
         return position;

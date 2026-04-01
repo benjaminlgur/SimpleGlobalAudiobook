@@ -1,7 +1,15 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import {
+  assertOwnership,
+  matchesUserId,
+  resolveAuthIdentity,
+  type ResolvedAuthIdentity,
+} from "./lib/auth";
+import { checkRateLimit } from "./lib/limits";
+
 
 const positionReturnValidator = v.object({
   _id: v.id("positions"),
@@ -10,28 +18,60 @@ const positionReturnValidator = v.object({
   chapterIndex: v.number(),
   positionMs: v.number(),
   updatedAt: v.number(),
+  userId: v.optional(v.string()),
 });
 
 async function resolveCanonicalId(
-  ctx: QueryCtx,
-  audiobookId: Id<"audiobooks">
+  ctx: QueryCtx | MutationCtx,
+  audiobookId: Id<"audiobooks">,
+  identity: ResolvedAuthIdentity,
 ): Promise<Id<"audiobooks">> {
-  const asLinked = await ctx.db
+  const links = await ctx.db
     .query("audiobookLinks")
     .withIndex("by_linked", (q) => q.eq("linkedId", audiobookId))
-    .unique();
-  return asLinked ? asLinked.canonicalId : audiobookId;
+    .collect();
+  const ownedLink = links.find((link) => matchesUserId(link.userId, identity));
+  return ownedLink ? ownedLink.canonicalId : audiobookId;
+}
+
+function getLatestOwnedPosition(
+  rows: Doc<"positions">[],
+  identity: ResolvedAuthIdentity,
+): Doc<"positions"> | null {
+  const ownedRows = rows.filter((row) => matchesUserId(row.userId, identity));
+  if (ownedRows.length === 0) {
+    return null;
+  }
+
+  ownedRows.sort((a, b) => b.updatedAt - a.updatedAt);
+  return ownedRows[0] ?? null;
 }
 
 export const get = query({
   args: { audiobookId: v.id("audiobooks") },
   returns: v.union(positionReturnValidator, v.null()),
   handler: async (ctx, args) => {
-    const canonicalId = await resolveCanonicalId(ctx, args.audiobookId);
-    return await ctx.db
+    const identity = await resolveAuthIdentity(ctx);
+
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+
+    const canonicalId = await resolveCanonicalId(ctx, args.audiobookId, identity);
+    const existing = await ctx.db
+      .query("positions")
+      .withIndex("by_user_and_audiobook", (q) =>
+        q.eq("userId", identity.userId).eq("audiobookId", canonicalId),
+      )
+      .unique();
+    if (existing) {
+      return existing;
+    }
+
+    const legacyRows = await ctx.db
       .query("positions")
       .withIndex("by_audiobook", (q) => q.eq("audiobookId", canonicalId))
-      .unique();
+      .collect();
+    return getLatestOwnedPosition(legacyRows, identity);
   },
 });
 
@@ -51,16 +91,45 @@ export const update = mutation({
         positionMs: v.number(),
         updatedAt: v.number(),
       }),
-      v.null()
+      v.null(),
     ),
   }),
   handler: async (ctx, args) => {
-    const canonicalId = await resolveCanonicalId(ctx, args.audiobookId);
+    const identity = await resolveAuthIdentity(ctx);
+    const userId = identity.userId;
+    await checkRateLimit(ctx, "positionUpdate", userId);
 
-    const existing = await ctx.db
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+
+    const canonicalId = await resolveCanonicalId(ctx, args.audiobookId, identity);
+
+    let existing = await ctx.db
       .query("positions")
-      .withIndex("by_audiobook", (q) => q.eq("audiobookId", canonicalId))
+      .withIndex("by_user_and_audiobook", (q) =>
+        q.eq("userId", userId).eq("audiobookId", canonicalId),
+      )
       .unique();
+
+    if (!existing) {
+      const legacyRows = await ctx.db
+        .query("positions")
+        .withIndex("by_audiobook", (q) => q.eq("audiobookId", canonicalId))
+        .collect();
+      const latestLegacy = getLatestOwnedPosition(legacyRows, identity);
+      if (latestLegacy) {
+        existing = latestLegacy;
+        await ctx.db.patch(existing._id, { userId });
+        for (const row of legacyRows) {
+          if (
+            row._id !== existing._id &&
+            matchesUserId(row.userId, identity)
+          ) {
+            await ctx.db.delete(row._id);
+          }
+        }
+      }
+    }
 
     if (existing && existing.updatedAt > args.clientUpdatedAt) {
       return {
@@ -88,6 +157,7 @@ export const update = mutation({
       chapterIndex: args.chapterIndex,
       positionMs: args.positionMs,
       updatedAt: args.clientUpdatedAt,
+      userId,
     });
     return { positionId: id, accepted: true, serverPosition: null };
   },

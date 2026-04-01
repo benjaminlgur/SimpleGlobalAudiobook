@@ -11,10 +11,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { useColorScheme } from "nativewind";
 
 interface SetupScreenProps {
-  onConnect: (url: string) => void;
+  onSelfHostedConnect: (url: string) => void;
+  onHostedConnect?: () => void;
 }
 
-export function SetupScreen({ onConnect }: SetupScreenProps) {
+export function SetupScreen({
+  onSelfHostedConnect,
+  onHostedConnect,
+}: SetupScreenProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const { colorScheme } = useColorScheme();
@@ -31,7 +35,7 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
       return;
     }
     setError(null);
-    onConnect(trimmed);
+    onSelfHostedConnect(trimmed);
   };
 
   return (
@@ -46,10 +50,36 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
             Simple Syncing Audiobook
           </Text>
           <Text className="text-sm text-gray-500 dark:text-gray-400 mt-2 text-center">
-            Connect to your Convex deployment to sync your audiobook progress
-            across devices.
+            Sync your audiobook progress across devices.
           </Text>
         </View>
+
+        {onHostedConnect && (
+          <>
+            <TouchableOpacity
+              onPress={onHostedConnect}
+              className="flex-row items-center justify-center border border-gray-300 dark:border-gray-700 rounded-xl py-3.5 mb-6 bg-white dark:bg-gray-900"
+            >
+              <Ionicons
+                name="logo-google"
+                size={20}
+                color={isDark ? "#e5e7eb" : "#374151"}
+                style={{ marginRight: 10 }}
+              />
+              <Text className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                Sign in with Google
+              </Text>
+            </TouchableOpacity>
+
+            <View className="flex-row items-center mb-6">
+              <View className="flex-1 h-px bg-gray-200 dark:bg-gray-800" />
+              <Text className="px-3 text-xs text-gray-400 dark:text-gray-500 uppercase">
+                or use your own deployment
+              </Text>
+              <View className="flex-1 h-px bg-gray-200 dark:bg-gray-800" />
+            </View>
+          </>
+        )}
 
         <View className="mb-4">
           <Text className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
@@ -78,7 +108,9 @@ export function SetupScreen({ onConnect }: SetupScreenProps) {
         </TouchableOpacity>
 
         <Text className="text-xs text-gray-400 dark:text-gray-500 text-center mt-6">
-          Your Convex URL is stored locally on this device.
+          {onHostedConnect
+            ? "Sign in for free sync, or use your own Convex deployment for unlimited storage."
+            : "Your Convex URL is stored locally on this device."}
         </Text>
       </View>
     </KeyboardAvoidingView>

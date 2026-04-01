@@ -15,7 +15,8 @@
     },
     "plugins": [
       "expo-router",
-      "expo-document-picker"
+      "expo-document-picker",
+      "expo-system-ui"
     ],
     "ios": {
       "bundleIdentifier": "com.simplesyncing.audiobook"

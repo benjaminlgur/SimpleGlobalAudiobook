@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -26,6 +26,8 @@ import { useMobileAudioPlayer } from "../hooks/useAudioPlayer";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
 import { Ionicons } from "@expo/vector-icons";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { useConvexContext } from "./_layout";
+import { getScopedStorageKey } from "../lib/storageScope";
 import { useTheme } from "../hooks/useTheme";
 
 const LIBRARY_KEY = "audiobook_library";
@@ -56,9 +58,99 @@ const asyncStorageAdapter = {
   removeItem: (key: string) => AsyncStorage.removeItem(key),
 };
 
+async function readStoredLibrary(storageKey: string): Promise<LocalAudiobook[]> {
+  const stored = await AsyncStorage.getItem(storageKey);
+  if (!stored) return [];
+
+  try {
+    return JSON.parse(stored) as LocalAudiobook[];
+  } catch {
+    return [];
+  }
+}
+
+function decodeUriValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function getHostedScopeMigrationMatch(scope: string): {
+  keyPrefix: string;
+  userMarker: string;
+} | null {
+  if (!scope.startsWith("hosted:")) {
+    return null;
+  }
+
+  const [, encodedUrl, encodedUserId] = scope.split(":");
+  if (!encodedUrl || !encodedUserId) {
+    return null;
+  }
+
+  const userId = decodeUriValue(encodedUserId);
+  return {
+    keyPrefix: `hosted:${encodedUrl}:`,
+    userMarker: `%7C${userId}%7C`,
+  };
+}
+
+async function findLegacyHostedScopedKey(
+  baseKey: string,
+  scope: string,
+): Promise<string | null> {
+  const match = getHostedScopeMigrationMatch(scope);
+  if (!match) {
+    return null;
+  }
+
+  const keys = await AsyncStorage.getAllKeys();
+  return (
+    keys.find(
+      (key) =>
+        key.startsWith(`${baseKey}:${match.keyPrefix}`) &&
+        key.includes(match.userMarker),
+    ) ?? null
+  );
+}
+
+async function loadScopedLibrary(
+  storageKey: string,
+  storageScope: string,
+  legacyKey?: string,
+): Promise<LocalAudiobook[]> {
+  const scopedStored = await AsyncStorage.getItem(storageKey);
+  if (scopedStored !== null) {
+    return readStoredLibrary(storageKey);
+  }
+
+  const legacyHostedKey = await findLegacyHostedScopedKey(LIBRARY_KEY, storageScope);
+  if (legacyHostedKey) {
+    const hostedLibrary = await readStoredLibrary(legacyHostedKey);
+    if (hostedLibrary.length > 0) {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(hostedLibrary));
+    }
+    return hostedLibrary;
+  }
+
+  if (!legacyKey) {
+    return [];
+  }
+
+  const legacyStored = await AsyncStorage.getItem(legacyKey);
+  if (legacyStored === null) {
+    return [];
+  }
+
+  return readStoredLibrary(legacyKey);
+}
+
 export default function PlayerScreen() {
   const { bookKey } = useLocalSearchParams<{ bookKey: string }>();
   const router = useRouter();
+  const { storageScope, mode } = useConvexContext();
   const [book, setBook] = useState<LocalAudiobook | null>(null);
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
@@ -87,6 +179,15 @@ export default function PlayerScreen() {
   const lateRemoteAppliedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
+  const libraryStorageKey = storageScope
+    ? getScopedStorageKey(LIBRARY_KEY, storageScope)
+    : null;
+  const lastPlayingStorageKey = storageScope
+    ? getScopedStorageKey(LAST_PLAYING_BOOK_KEY, storageScope)
+    : null;
+  const legacyLibraryKey = mode === "self-hosted" ? LIBRARY_KEY : undefined;
+  const legacyLastPlayingKey =
+    mode === "self-hosted" ? LAST_PLAYING_BOOK_KEY : undefined;
 
   useEffect(() => {
     initialLoadedRef.current = initialLoaded;
@@ -131,25 +232,40 @@ export default function PlayerScreen() {
 
   // Load book from local storage
   useEffect(() => {
-    if (!bookKey) return;
-    AsyncStorage.setItem(LAST_PLAYING_BOOK_KEY, bookKey).catch(() => {
-      // Non-fatal; notification deep-link fallback will use library route.
-    });
+    if (!bookKey || !libraryStorageKey || !storageScope) {
+      setBook(null);
+      return;
+    }
 
-    AsyncStorage.getItem(LIBRARY_KEY).then((stored) => {
-      if (!stored) return;
-      try {
-        const library: LocalAudiobook[] = JSON.parse(stored);
-        const [name, checksum] = bookKey.split("::");
-        const found = library.find(
-          (b) => b.name === name && b.checksum === checksum,
-        );
-        if (found) setBook(found);
-      } catch {
-        // ignore
-      }
+    if (lastPlayingStorageKey) {
+      AsyncStorage.setItem(lastPlayingStorageKey, bookKey).catch(() => {
+        // Non-fatal; notification deep-link fallback will use library route.
+      });
+    } else if (legacyLastPlayingKey) {
+      AsyncStorage.setItem(legacyLastPlayingKey, bookKey).catch(() => {
+        // Non-fatal; notification deep-link fallback will use library route.
+      });
+    }
+
+    void loadScopedLibrary(
+      libraryStorageKey,
+      storageScope,
+      legacyLibraryKey,
+    ).then((library) => {
+      const [name, checksum] = bookKey.split("::");
+      const found = library.find(
+        (b) => b.name === name && b.checksum === checksum,
+      );
+      setBook(found ?? null);
     });
-  }, [bookKey]);
+  }, [
+    bookKey,
+    lastPlayingStorageKey,
+    legacyLastPlayingKey,
+    legacyLibraryKey,
+    libraryStorageKey,
+    storageScope,
+  ]);
 
   useEffect(() => {
     setInitialChapter(0);
@@ -164,18 +280,32 @@ export default function PlayerScreen() {
   }, [bookKey]);
 
   const convexId = book?.convexId;
-  const syncStorageKey = book
+  const syncIdentity = book
     ? convexId || `local_${book.name}_${book.checksum}`
     : null;
+  const scopedStorageAdapter = useMemo(
+    () =>
+      storageScope
+        ? {
+            getItem: (key: string) =>
+              asyncStorageAdapter.getItem(`${storageScope}:${key}`),
+            setItem: (key: string, value: string) =>
+              asyncStorageAdapter.setItem(`${storageScope}:${key}`, value),
+            removeItem: (key: string) =>
+              asyncStorageAdapter.removeItem(`${storageScope}:${key}`),
+          }
+        : null,
+    [storageScope],
+  );
   const remotePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip",
   );
 
   useEffect(() => {
-    if (!syncStorageKey) return;
+    if (!syncIdentity) return;
     setLocalInitResolved(false);
-  }, [syncStorageKey]);
+  }, [syncIdentity]);
 
   // Resolve Convex ID
   useEffect(() => {
@@ -277,7 +407,7 @@ export default function PlayerScreen() {
 
   // Initialize sync engine — works with or without a Convex ID.
   useEffect(() => {
-    if (!book || !syncStorageKey) return;
+    if (!book || !syncIdentity || !scopedStorageAdapter) return;
     let cancelled = false;
 
     const pushFn = async (position: {
@@ -310,8 +440,8 @@ export default function PlayerScreen() {
     };
 
     const engine = new SyncEngine(
-      syncStorageKey,
-      asyncStorageAdapter,
+      syncIdentity,
+      scopedStorageAdapter,
       pushFn,
       onRemoteNewer,
     );
@@ -339,7 +469,7 @@ export default function PlayerScreen() {
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition, book, syncStorageKey]);
+  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition, book]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {

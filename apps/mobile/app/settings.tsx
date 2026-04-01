@@ -1,6 +1,7 @@
 import { View, Text, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexContext } from "./_layout";
 import { useTheme } from "../hooks/useTheme";
 
@@ -12,19 +13,67 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: keyof typeof
   { value: "system", label: "System", icon: "phone-portrait-outline" },
 ];
 
+function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
+  const { signOut } = useAuthActions();
+  const { isDark } = useTheme();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch {
+      // May fail if already signed out
+    }
+    onSignOut();
+  };
+
+  return (
+    <>
+      <TouchableOpacity
+        onPress={handleSignOut}
+        className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 px-4 py-3.5"
+      >
+        <Text className="text-sm font-medium text-red-600 dark:text-red-400">
+          Sign out
+        </Text>
+      </TouchableOpacity>
+      <Text className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+        This will sign you out and return to the setup screen.
+      </Text>
+    </>
+  );
+}
+
+function DisconnectButton({ onDisconnect }: { onDisconnect: () => void }) {
+  return (
+    <>
+      <TouchableOpacity
+        onPress={onDisconnect}
+        className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 px-4 py-3.5"
+      >
+        <Text className="text-sm font-medium text-red-600 dark:text-red-400">
+          Disconnect from Convex
+        </Text>
+      </TouchableOpacity>
+      <Text className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+        This will remove the saved deployment URL and return to the setup screen.
+      </Text>
+    </>
+  );
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
-  const { setConvexUrl } = useConvexContext();
+  const { disconnect, mode } = useConvexContext();
   const { theme, setTheme, isDark } = useTheme();
+  const isHosted = mode === "hosted";
 
   const handleDisconnect = () => {
-    setConvexUrl(null);
+    disconnect();
     router.replace("/");
   };
 
   return (
     <View className="flex-1 bg-white dark:bg-gray-950">
-      {/* Header */}
       <View className="px-4 pt-2 pb-3 flex-row items-center border-b border-gray-200 dark:border-gray-800">
         <TouchableOpacity
           onPress={() => router.back()}
@@ -38,7 +87,6 @@ export default function SettingsScreen() {
       <View className="flex-1 px-4 pt-4">
         <Text className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">Settings</Text>
 
-        {/* Appearance */}
         <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
           Appearance
         </Text>
@@ -71,21 +119,14 @@ export default function SettingsScreen() {
           ))}
         </View>
 
-        {/* Connection */}
         <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
-          Connection
+          {isHosted ? "Account" : "Connection"}
         </Text>
-        <TouchableOpacity
-          onPress={handleDisconnect}
-          className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 px-4 py-3.5"
-        >
-          <Text className="text-sm font-medium text-red-600 dark:text-red-400">
-            Disconnect from Convex
-          </Text>
-        </TouchableOpacity>
-        <Text className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-          This will remove the saved deployment URL and return to the setup screen.
-        </Text>
+        {isHosted ? (
+          <SignOutButton onSignOut={handleDisconnect} />
+        ) : (
+          <DisconnectButton onDisconnect={handleDisconnect} />
+        )}
       </View>
     </View>
   );

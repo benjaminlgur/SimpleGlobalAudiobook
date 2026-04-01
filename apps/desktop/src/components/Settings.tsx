@@ -1,4 +1,6 @@
+import { useAuthActions } from "@convex-dev/auth/react";
 import { useTheme } from "../hooks/useTheme";
+import { useConnectionMode } from "../App";
 
 type ThemePreference = "light" | "dark" | "system";
 
@@ -37,8 +39,32 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: React.ReactN
   },
 ];
 
+function SignOutButton({ onDisconnect }: { onDisconnect: () => void }) {
+  const { signOut } = useAuthActions();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch {
+      // May fail if already signed out
+    }
+    onDisconnect();
+  };
+
+  return (
+    <button
+      onClick={handleSignOut}
+      className="w-full rounded-lg border border-destructive/30 text-destructive bg-destructive/5 hover:bg-destructive/10 px-4 py-3 text-sm font-medium transition-colors text-left"
+    >
+      Sign out
+    </button>
+  );
+}
+
 export function Settings({ onBack, onDisconnect }: SettingsProps) {
   const { theme, setTheme } = useTheme();
+  const mode = useConnectionMode();
+  const isHosted = mode === "hosted";
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -57,7 +83,6 @@ export function Settings({ onBack, onDisconnect }: SettingsProps) {
       <div className="flex-1 p-4 overflow-auto">
         <h1 className="text-lg font-semibold text-foreground mb-6">Settings</h1>
 
-        {/* Appearance */}
         <section className="mb-8">
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
             Appearance
@@ -80,19 +105,24 @@ export function Settings({ onBack, onDisconnect }: SettingsProps) {
           </div>
         </section>
 
-        {/* Connection */}
         <section>
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-            Connection
+            {isHosted ? "Account" : "Connection"}
           </h2>
-          <button
-            onClick={onDisconnect}
-            className="w-full rounded-lg border border-destructive/30 text-destructive bg-destructive/5 hover:bg-destructive/10 px-4 py-3 text-sm font-medium transition-colors text-left"
-          >
-            Disconnect from Convex
-          </button>
+          {isHosted ? (
+            <SignOutButton onDisconnect={onDisconnect} />
+          ) : (
+            <button
+              onClick={onDisconnect}
+              className="w-full rounded-lg border border-destructive/30 text-destructive bg-destructive/5 hover:bg-destructive/10 px-4 py-3 text-sm font-medium transition-colors text-left"
+            >
+              Disconnect from Convex
+            </button>
+          )}
           <p className="text-xs text-muted-foreground mt-2">
-            This will remove the saved deployment URL and return to the setup screen.
+            {isHosted
+              ? "This will sign you out and return to the setup screen."
+              : "This will remove the saved deployment URL and return to the setup screen."}
           </p>
         </section>
       </div>

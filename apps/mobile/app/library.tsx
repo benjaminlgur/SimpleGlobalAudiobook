@@ -22,6 +22,7 @@ import { useConvexContext } from "./_layout";
 import { Ionicons } from "@expo/vector-icons";
 import { LinkingModal } from "../components/LinkingModal";
 import { extractCoverArtFromAudioUris } from "../lib/coverArt";
+import { getScopedStorageKey } from "../lib/storageScope";
 import { useTheme } from "../hooks/useTheme";
 
 const LIBRARY_KEY = "audiobook_library";
@@ -137,81 +138,231 @@ function getFolderNameFromUri(uri: string): string | null {
   return name || null;
 }
 
+async function readStoredLibrary(storageKey: string): Promise<LocalAudiobook[]> {
+  const stored = await AsyncStorage.getItem(storageKey);
+  if (!stored) return [];
+
+  try {
+    return JSON.parse(stored) as LocalAudiobook[];
+  } catch {
+    return [];
+  }
+}
+
+function getHostedScopeMigrationMatch(scope: string): {
+  keyPrefix: string;
+  userMarker: string;
+} | null {
+  if (!scope.startsWith("hosted:")) {
+    return null;
+  }
+
+  const [, encodedUrl, encodedUserId] = scope.split(":");
+  if (!encodedUrl || !encodedUserId) {
+    return null;
+  }
+
+  const userId = decodeUriValue(encodedUserId);
+  return {
+    keyPrefix: `hosted:${encodedUrl}:`,
+    userMarker: `%7C${userId}%7C`,
+  };
+}
+
+async function findLegacyHostedScopedKey(
+  baseKey: string,
+  scope: string,
+): Promise<string | null> {
+  const match = getHostedScopeMigrationMatch(scope);
+  if (!match) {
+    return null;
+  }
+
+  const keys = await AsyncStorage.getAllKeys();
+  return (
+    keys.find(
+      (key) =>
+        key.startsWith(`${baseKey}:${match.keyPrefix}`) &&
+        key.includes(match.userMarker),
+    ) ?? null
+  );
+}
+
+async function loadScopedLibrary(
+  storageKey: string,
+  storageScope: string,
+  legacyKey?: string,
+): Promise<LocalAudiobook[]> {
+  const scopedStored = await AsyncStorage.getItem(storageKey);
+  if (scopedStored !== null) {
+    return readStoredLibrary(storageKey);
+  }
+
+  const legacyHostedKey = await findLegacyHostedScopedKey(LIBRARY_KEY, storageScope);
+  if (legacyHostedKey) {
+    const hostedLibrary = await readStoredLibrary(legacyHostedKey);
+    if (hostedLibrary.length > 0) {
+      await AsyncStorage.setItem(storageKey, JSON.stringify(hostedLibrary));
+    }
+    return hostedLibrary;
+  }
+
+  if (!legacyKey) {
+    return [];
+  }
+
+  const legacyStored = await AsyncStorage.getItem(legacyKey);
+  if (legacyStored === null) {
+    return [];
+  }
+
+  const legacyLibrary = await readStoredLibrary(legacyKey);
+  if (legacyLibrary.length > 0) {
+    await AsyncStorage.setItem(storageKey, JSON.stringify(legacyLibrary));
+  }
+  return legacyLibrary;
+}
+
+async function getOrCreateScopedDeviceId(
+  storageKey: string,
+  storageScope: string,
+  legacyKey?: string,
+): Promise<string> {
+  const existing = await AsyncStorage.getItem(storageKey);
+  if (existing) return existing;
+
+  const legacyHostedKey = await findLegacyHostedScopedKey(
+    DEVICE_ID_KEY,
+    storageScope,
+  );
+  if (legacyHostedKey) {
+    const legacyHostedDeviceId = await AsyncStorage.getItem(legacyHostedKey);
+    if (legacyHostedDeviceId) {
+      await AsyncStorage.setItem(storageKey, legacyHostedDeviceId);
+      return legacyHostedDeviceId;
+    }
+  }
+
+  if (legacyKey) {
+    const legacy = await AsyncStorage.getItem(legacyKey);
+    if (legacy) {
+      await AsyncStorage.setItem(storageKey, legacy);
+      return legacy;
+    }
+  }
+
+  const next = `mobile_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+  await AsyncStorage.setItem(storageKey, next);
+  return next;
+}
+
+function isInvalidAudiobookIdError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("ArgumentValidationError") ||
+    error.message.includes('v.id("audiobooks")') ||
+    error.message.includes("does not match validator")
+  );
+}
+
 export default function LibraryScreen() {
   const [library, setLibrary] = useState<LocalAudiobook[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [linkingBook, setLinkingBook] = useState<LocalAudiobook | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const { client } = useConvexContext();
+  const { client, storageScope, mode } = useConvexContext();
   const { isDark } = useTheme();
   const router = useRouter();
+  const libraryStorageKey = storageScope
+    ? getScopedStorageKey(LIBRARY_KEY, storageScope)
+    : null;
+  const deviceStorageKey = storageScope
+    ? getScopedStorageKey(DEVICE_ID_KEY, storageScope)
+    : null;
+  const legacyLibraryKey = mode === "self-hosted" ? LIBRARY_KEY : undefined;
+  const legacyDeviceKey = mode === "self-hosted" ? DEVICE_ID_KEY : undefined;
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
   const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
   const removeFromDevice = useMutation(api.audiobooks.removeFromDevice);
   const removeFromDatabase = useMutation(api.audiobooks.remove);
   const remoteOnlyBooks = useQuery(
     api.audiobooks.listRemoteForDevice,
-    deviceId ? { deviceId, refreshToken } : "skip",
+    deviceId && storageReady ? { deviceId, refreshToken } : "skip",
   );
   const remoteOnlyCount = remoteOnlyBooks?.length ?? 0;
 
   useEffect(() => {
-    (async () => {
-      const existing = await AsyncStorage.getItem(DEVICE_ID_KEY);
-      if (existing) {
-        setDeviceId(existing);
+    let cancelled = false;
+
+    void (async () => {
+      if (!libraryStorageKey || !deviceStorageKey || !storageScope) {
+        setDeviceId(null);
+        setLibrary([]);
+        setLinkingBook(null);
+        setStorageReady(false);
         return;
       }
 
-      const next = `mobile_${Date.now().toString(36)}_${Math.random()
-        .toString(36)
-        .slice(2, 10)}`;
-      await AsyncStorage.setItem(DEVICE_ID_KEY, next);
-      setDeviceId(next);
-    })();
-  }, []);
+      setStorageReady(false);
+      setLinkingBook(null);
 
-  useEffect(() => {
-    (async () => {
-      const stored = await AsyncStorage.getItem(LIBRARY_KEY);
-      if (!stored) return;
-      try {
-        const books: LocalAudiobook[] = JSON.parse(stored);
-        const validated = await Promise.all(
-          books.map(async (book) => {
-            try {
-              const firstUri = book.folderPath.split("|")[0];
-              const info = await FileSystem.getInfoAsync(firstUri);
-              return { ...book, missing: !info.exists };
-            } catch {
-              return { ...book, missing: true };
-            }
-          }),
-        );
-        setLibrary(validated);
-      } catch {
-        // ignore
-      }
+      const nextDeviceId = await getOrCreateScopedDeviceId(
+        deviceStorageKey,
+        storageScope,
+        legacyDeviceKey,
+      );
+      const books = await loadScopedLibrary(
+        libraryStorageKey,
+        storageScope,
+        legacyLibraryKey,
+      );
+      const validated = await Promise.all(
+        books.map(async (book) => {
+          try {
+            const firstUri = book.folderPath.split("|")[0];
+            const info = await FileSystem.getInfoAsync(firstUri);
+            return { ...book, missing: !info.exists };
+          } catch {
+            return { ...book, missing: true };
+          }
+        }),
+      );
+
+      if (cancelled) return;
+
+      setDeviceId(nextDeviceId);
+      setLibrary(validated);
+      setStorageReady(true);
     })();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceStorageKey, legacyDeviceKey, legacyLibraryKey, libraryStorageKey]);
 
   const saveLibrary = useCallback(async (books: LocalAudiobook[]) => {
     setLibrary(books);
-    await AsyncStorage.setItem(LIBRARY_KEY, JSON.stringify(books));
-  }, []);
+    if (libraryStorageKey) {
+      await AsyncStorage.setItem(libraryStorageKey, JSON.stringify(books));
+    }
+  }, [libraryStorageKey]);
 
   useEffect(() => {
     let cancelled = false;
 
     const pruneBooksMissingInDatabase = async () => {
-      if (!client || library.length === 0) return;
+      if (!client || !storageReady || library.length === 0) return;
 
       const booksWithConvexId = library.filter((book) => !!book.convexId);
       if (booksWithConvexId.length === 0) return;
 
       const missingKeys = new Set<string>();
+      const invalidIdKeys = new Set<string>();
 
       await Promise.all(
         booksWithConvexId.map(async (book) => {
@@ -222,17 +373,25 @@ export default function LibraryScreen() {
             if (!doc) {
               missingKeys.add(`${book.name}::${book.checksum}`);
             }
-          } catch {
-            // Keep local library as-is while offline or if request fails.
+          } catch (error) {
+            if (isInvalidAudiobookIdError(error)) {
+              invalidIdKeys.add(`${book.name}::${book.checksum}`);
+            }
           }
         }),
       );
 
-      if (missingKeys.size === 0 || cancelled) return;
+      if ((missingKeys.size === 0 && invalidIdKeys.size === 0) || cancelled) {
+        return;
+      }
 
-      const updated = library.filter(
-        (book) => !missingKeys.has(`${book.name}::${book.checksum}`),
-      );
+      const updated = library
+        .filter((book) => !missingKeys.has(`${book.name}::${book.checksum}`))
+        .map((book) =>
+          invalidIdKeys.has(`${book.name}::${book.checksum}`)
+            ? { ...book, convexId: undefined }
+            : book,
+        );
       await saveLibrary(updated);
     };
 
@@ -240,13 +399,13 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [client, library, saveLibrary]);
+  }, [client, library, saveLibrary, storageReady]);
 
   useEffect(() => {
     let cancelled = false;
 
     const registerLocalBooks = async () => {
-      if (!deviceId || library.length === 0) return;
+      if (!storageReady || !deviceId || library.length === 0) return;
 
       const updated = [...library];
       let changed = false;
@@ -290,7 +449,7 @@ export default function LibraryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [deviceId, getOrCreate, library, registerOnDevice, saveLibrary]);
+  }, [deviceId, getOrCreate, library, registerOnDevice, saveLibrary, storageReady]);
 
   const handlePickFolder = async () => {
     setIsScanning(true);
@@ -543,6 +702,16 @@ export default function LibraryScreen() {
     await new Promise((resolve) => setTimeout(resolve, 500));
     setIsRefreshing(false);
   }, []);
+
+  if (!storageScope || !storageReady || !deviceId) {
+    return (
+      <View className="flex-1 bg-white dark:bg-gray-950 items-center justify-center">
+        <Text className="text-sm text-gray-500 dark:text-gray-400">
+          Loading library...
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View className="flex-1 bg-white dark:bg-gray-950">

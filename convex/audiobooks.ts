@@ -1,7 +1,18 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import {
+  assertOwnership,
+  matchesUserId,
+  resolveAuthIdentity,
+  type ResolvedAuthIdentity,
+} from "./lib/auth";
+import {
+  checkRateLimit,
+  checkAudiobookCap,
+  checkDeviceCap,
+} from "./lib/limits";
 
 const chapterValidator = v.object({
   index: v.number(),
@@ -18,13 +29,14 @@ const audiobookReturnValidator = v.object({
   name: v.string(),
   checksum: v.string(),
   chapters: v.array(chapterValidator),
+  userId: v.optional(v.string()),
 });
 
 const platformValidator = v.union(v.literal("mobile"), v.literal("desktop"));
 
 async function deleteAudiobookCascade(
   ctx: MutationCtx,
-  audiobookId: Id<"audiobooks">
+  audiobookId: Id<"audiobooks">,
 ) {
   const linksAsCanonical = await ctx.db
     .query("audiobookLinks")
@@ -64,6 +76,149 @@ async function deleteAudiobookCascade(
   }
 }
 
+function mergeOwnedDocs<T extends { _id: string }>(docs: T[]): T[] {
+  const merged = new Map<string, T>();
+  for (const doc of docs) {
+    merged.set(doc._id, doc);
+  }
+  return [...merged.values()];
+}
+
+async function listLegacyAudiobooks(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+): Promise<Doc<"audiobooks">[]> {
+  const docs: Doc<"audiobooks">[] = [];
+
+  for (const legacyUserId of identity.exactUserIds) {
+    if (legacyUserId === identity.userId) continue;
+    const rows = await ctx.db
+      .query("audiobooks")
+      .withIndex("by_user", (q) => q.eq("userId", legacyUserId))
+      .collect();
+    for (const row of rows) {
+      if (matchesUserId(row.userId, identity)) {
+        docs.push(row);
+      }
+    }
+  }
+
+  for (const prefix of identity.legacyUserPrefixes) {
+    const rows = await ctx.db
+      .query("audiobooks")
+      .withIndex("by_user", (q) =>
+        q.gte("userId", prefix).lt("userId", `${prefix}\uffff`),
+      )
+      .collect();
+    for (const row of rows) {
+      if (matchesUserId(row.userId, identity)) {
+        docs.push(row);
+      }
+    }
+  }
+
+  return mergeOwnedDocs(docs);
+}
+
+async function listLegacyDeviceCopies(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+): Promise<Doc<"audiobookDeviceCopies">[]> {
+  const docs: Doc<"audiobookDeviceCopies">[] = [];
+
+  for (const legacyUserId of identity.exactUserIds) {
+    if (legacyUserId === identity.userId) continue;
+    const rows = await ctx.db
+      .query("audiobookDeviceCopies")
+      .withIndex("by_user", (q) => q.eq("userId", legacyUserId))
+      .collect();
+    for (const row of rows) {
+      if (matchesUserId(row.userId, identity)) {
+        docs.push(row);
+      }
+    }
+  }
+
+  for (const prefix of identity.legacyUserPrefixes) {
+    const rows = await ctx.db
+      .query("audiobookDeviceCopies")
+      .withIndex("by_user", (q) =>
+        q.gte("userId", prefix).lt("userId", `${prefix}\uffff`),
+      )
+      .collect();
+    for (const row of rows) {
+      if (matchesUserId(row.userId, identity)) {
+        docs.push(row);
+      }
+    }
+  }
+
+  return mergeOwnedDocs(docs);
+}
+
+async function listOwnedAudiobooks(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+) {
+  const current = await ctx.db
+    .query("audiobooks")
+    .withIndex("by_user", (q) => q.eq("userId", identity.userId))
+    .collect();
+  const legacy = await listLegacyAudiobooks(ctx, identity);
+  return mergeOwnedDocs([...current, ...legacy]);
+}
+
+async function listOwnedDeviceCopies(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+) {
+  const current = await ctx.db
+    .query("audiobookDeviceCopies")
+    .withIndex("by_user", (q) => q.eq("userId", identity.userId))
+    .collect();
+  const legacy = await listLegacyDeviceCopies(ctx, identity);
+  return mergeOwnedDocs([...current, ...legacy]);
+}
+
+async function findOwnedDeviceCopies(
+  ctx: MutationCtx,
+  identity: ResolvedAuthIdentity,
+  audiobookId: Id<"audiobooks">,
+  deviceId: string,
+) {
+  const copies = await ctx.db
+    .query("audiobookDeviceCopies")
+    .withIndex("by_audiobook_device", (q) =>
+      q.eq("audiobookId", audiobookId).eq("deviceId", deviceId),
+    )
+    .collect();
+  return copies.filter((copy) => matchesUserId(copy.userId, identity));
+}
+
+async function findOwnedLinksByLinkedId(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+  linkedId: Id<"audiobooks">,
+) {
+  const links = await ctx.db
+    .query("audiobookLinks")
+    .withIndex("by_linked", (q) => q.eq("linkedId", linkedId))
+    .collect();
+  return links.filter((link) => matchesUserId(link.userId, identity));
+}
+
+async function findOwnedLinksByCanonicalId(
+  ctx: QueryCtx | MutationCtx,
+  identity: ResolvedAuthIdentity,
+  canonicalId: Id<"audiobooks">,
+) {
+  const links = await ctx.db
+    .query("audiobookLinks")
+    .withIndex("by_canonical", (q) => q.eq("canonicalId", canonicalId))
+    .collect();
+  return links.filter((link) => matchesUserId(link.userId, identity));
+}
+
 export const getOrCreate = mutation({
   args: {
     name: v.string(),
@@ -75,10 +230,14 @@ export const getOrCreate = mutation({
     isNew: v.boolean(),
   }),
   handler: async (ctx, args) => {
+    const identity = await resolveAuthIdentity(ctx);
+    const userId = identity.userId;
+    await checkRateLimit(ctx, "getOrCreate", userId);
+
     const existing = await ctx.db
       .query("audiobooks")
-      .withIndex("by_name_checksum", (q) =>
-        q.eq("name", args.name).eq("checksum", args.checksum)
+      .withIndex("by_user_and_name_checksum", (q) =>
+        q.eq("userId", userId).eq("name", args.name).eq("checksum", args.checksum),
       )
       .unique();
 
@@ -86,10 +245,23 @@ export const getOrCreate = mutation({
       return { audiobookId: existing._id, isNew: false };
     }
 
+    const legacyExisting = (await listOwnedAudiobooks(ctx, identity)).find(
+      (book) => book.name === args.name && book.checksum === args.checksum,
+    );
+    if (legacyExisting) {
+      if (legacyExisting.userId !== userId) {
+        await ctx.db.patch(legacyExisting._id, { userId });
+      }
+      return { audiobookId: legacyExisting._id, isNew: false };
+    }
+
+    await checkAudiobookCap(ctx, userId);
+
     const id = await ctx.db.insert("audiobooks", {
       name: args.name,
       checksum: args.checksum,
       chapters: args.chapters,
+      userId,
     });
 
     return { audiobookId: id, isNew: true };
@@ -100,7 +272,8 @@ export const list = query({
   args: {},
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx) => {
-    return await ctx.db.query("audiobooks").collect();
+    const identity = await resolveAuthIdentity(ctx);
+    return await listOwnedAudiobooks(ctx, identity);
   },
 });
 
@@ -111,15 +284,15 @@ export const listRemoteForDevice = query({
   },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
-    const localCopies = await ctx.db
-      .query("audiobookDeviceCopies")
-      .withIndex("by_device", (q) => q.eq("deviceId", args.deviceId))
-      .collect();
+    const identity = await resolveAuthIdentity(ctx);
+    const allUserCopies = await listOwnedDeviceCopies(ctx, identity);
+    const localCopies = allUserCopies.filter(
+      (row) => row.deviceId === args.deviceId,
+    );
     const localAudiobookIds = new Set(localCopies.map((row) => row.audiobookId));
 
-    const allCopies = await ctx.db.query("audiobookDeviceCopies").collect();
     const remoteAudiobookIds = new Set<Id<"audiobooks">>();
-    for (const copy of allCopies) {
+    for (const copy of allUserCopies) {
       if (localAudiobookIds.has(copy.audiobookId)) continue;
       remoteAudiobookIds.add(copy.audiobookId);
     }
@@ -137,7 +310,13 @@ export const get = query({
   args: { id: v.id("audiobooks") },
   returns: v.union(audiobookReturnValidator, v.null()),
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const doc = await ctx.db.get(args.id);
+    try {
+      await assertOwnership(ctx, doc);
+    } catch {
+      return null;
+    }
+    return doc;
   },
 });
 
@@ -145,10 +324,10 @@ export const findByName = query({
   args: { name: v.string() },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
-    return await ctx.db
-      .query("audiobooks")
-      .withIndex("by_name", (q) => q.eq("name", args.name))
-      .collect();
+    const identity = await resolveAuthIdentity(ctx);
+    return (await listOwnedAudiobooks(ctx, identity)).filter(
+      (book) => book.name === args.name,
+    );
   },
 });
 
@@ -159,14 +338,21 @@ export const link = mutation({
   },
   returns: v.id("audiobookLinks"),
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("audiobookLinks")
-      .withIndex("by_linked", (q) => q.eq("linkedId", args.linkedId))
-      .unique();
+    const identity = await resolveAuthIdentity(ctx);
+    const userId = identity.userId;
+    await checkRateLimit(ctx, "linkUnlink", userId);
+
+    const canonical = await ctx.db.get(args.canonicalId);
+    await assertOwnership(ctx, canonical);
+    const linked = await ctx.db.get(args.linkedId);
+    await assertOwnership(ctx, linked);
+
+    const existing = (await findOwnedLinksByLinkedId(ctx, identity, args.linkedId))[0];
 
     if (existing) {
       await ctx.db.patch(existing._id, {
         canonicalId: args.canonicalId,
+        userId,
       });
       return existing._id;
     }
@@ -174,6 +360,7 @@ export const link = mutation({
     return await ctx.db.insert("audiobookLinks", {
       canonicalId: args.canonicalId,
       linkedId: args.linkedId,
+      userId,
     });
   },
 });
@@ -185,11 +372,16 @@ export const unlink = mutation({
   },
   returns: v.boolean(),
   handler: async (ctx, args) => {
-    // The link row could have either ordering, so check both directions
-    const asLinked = await ctx.db
-      .query("audiobookLinks")
-      .withIndex("by_linked", (q) => q.eq("linkedId", args.peerId))
-      .collect();
+    const identity = await resolveAuthIdentity(ctx);
+    const userId = identity.userId;
+    await checkRateLimit(ctx, "linkUnlink", userId);
+
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+    const peer = await ctx.db.get(args.peerId);
+    await assertOwnership(ctx, peer);
+
+    const asLinked = await findOwnedLinksByLinkedId(ctx, identity, args.peerId);
     for (const row of asLinked) {
       if (row.canonicalId === args.audiobookId) {
         await ctx.db.delete(row._id);
@@ -197,10 +389,11 @@ export const unlink = mutation({
       }
     }
 
-    const asCanonical = await ctx.db
-      .query("audiobookLinks")
-      .withIndex("by_canonical", (q) => q.eq("canonicalId", args.peerId))
-      .collect();
+    const asCanonical = await findOwnedLinksByCanonicalId(
+      ctx,
+      identity,
+      args.peerId,
+    );
     for (const row of asCanonical) {
       if (row.linkedId === args.audiobookId) {
         await ctx.db.delete(row._id);
@@ -216,15 +409,22 @@ export const getLinked = query({
   args: { audiobookId: v.id("audiobooks") },
   returns: v.array(audiobookReturnValidator),
   handler: async (ctx, args) => {
-    const asCanonical = await ctx.db
-      .query("audiobookLinks")
-      .withIndex("by_canonical", (q) => q.eq("canonicalId", args.audiobookId))
-      .collect();
+    const identity = await resolveAuthIdentity(ctx);
 
-    const asLinked = await ctx.db
-      .query("audiobookLinks")
-      .withIndex("by_linked", (q) => q.eq("linkedId", args.audiobookId))
-      .collect();
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+
+    const asCanonical = await findOwnedLinksByCanonicalId(
+      ctx,
+      identity,
+      args.audiobookId,
+    );
+
+    const asLinked = await findOwnedLinksByLinkedId(
+      ctx,
+      identity,
+      args.audiobookId,
+    );
 
     const relatedIds: Id<"audiobooks">[] = [];
     for (const l of asCanonical) relatedIds.push(l.linkedId);
@@ -235,8 +435,8 @@ export const getLinked = query({
     for (const id of relatedIds) {
       if (seen.has(id)) continue;
       seen.add(id);
-      const book = await ctx.db.get(id);
-      if (book) results.push(book);
+      const related = await ctx.db.get(id);
+      if (related) results.push(related);
     }
     return results;
   },
@@ -246,6 +446,8 @@ export const remove = mutation({
   args: { id: v.id("audiobooks") },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const book = await ctx.db.get(args.id);
+    await assertOwnership(ctx, book);
     await deleteAudiobookCascade(ctx, args.id);
     return null;
   },
@@ -259,17 +461,26 @@ export const registerOnDevice = mutation({
   },
   returns: v.id("audiobookDeviceCopies"),
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("audiobookDeviceCopies")
-      .withIndex("by_audiobook_device", (q) =>
-        q.eq("audiobookId", args.audiobookId).eq("deviceId", args.deviceId)
-      )
-      .unique();
+    const identity = await resolveAuthIdentity(ctx);
+    const userId = identity.userId;
+    await checkRateLimit(ctx, "registerOnDevice", userId);
+
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+    await checkDeviceCap(ctx, userId, args.deviceId);
+
+    const existing = (await findOwnedDeviceCopies(
+      ctx,
+      identity,
+      args.audiobookId,
+      args.deviceId,
+    ))[0];
 
     if (existing) {
       await ctx.db.patch(existing._id, {
         platform: args.platform,
         updatedAt: Date.now(),
+        userId,
       });
       return existing._id;
     }
@@ -279,6 +490,7 @@ export const registerOnDevice = mutation({
       deviceId: args.deviceId,
       platform: args.platform,
       updatedAt: Date.now(),
+      userId,
     });
   },
 });
@@ -293,16 +505,21 @@ export const removeFromDevice = mutation({
     deletedAudiobook: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("audiobookDeviceCopies")
-      .withIndex("by_audiobook_device", (q) =>
-        q.eq("audiobookId", args.audiobookId).eq("deviceId", args.deviceId)
-      )
-      .unique();
+    const identity = await resolveAuthIdentity(ctx);
+
+    const book = await ctx.db.get(args.audiobookId);
+    await assertOwnership(ctx, book);
+
+    const existing = await findOwnedDeviceCopies(
+      ctx,
+      identity,
+      args.audiobookId,
+      args.deviceId,
+    );
 
     let removedFromDevice = false;
-    if (existing) {
-      await ctx.db.delete(existing._id);
+    for (const copy of existing) {
+      await ctx.db.delete(copy._id);
       removedFromDevice = true;
     }
 

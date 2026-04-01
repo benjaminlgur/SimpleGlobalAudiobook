@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { useAudioPlayer } from "../hooks/useAudioPlayer";
@@ -14,6 +14,7 @@ import type { Id } from "../../../../convex/_generated/dataModel";
 interface PlayerProps {
   book: LocalAudiobook;
   convexUrl: string;
+  storageScope: string;
   onBack: () => void;
   onConvexIdResolved: (id: string) => void;
   onRelocate: (newFolderPath: string) => void;
@@ -32,6 +33,7 @@ const REMOTE_POSITION_PROMPT_DELAY_MS = 12_000;
 export function Player({
   book,
   convexUrl,
+  storageScope,
   onBack,
   onConvexIdResolved,
   onRelocate,
@@ -81,7 +83,18 @@ export function Player({
   }, []);
 
   const convexId = book.convexId;
-  const syncStorageKey = convexId || `local_${book.name}_${book.checksum}`;
+  const syncIdentity = convexId || `local_${book.name}_${book.checksum}`;
+  const scopedStorageAdapter = useMemo(
+    () => ({
+      getItem: (key: string) =>
+        localStorageAdapter.getItem(`${storageScope}:${key}`),
+      setItem: (key: string, value: string) =>
+        localStorageAdapter.setItem(`${storageScope}:${key}`, value),
+      removeItem: (key: string) =>
+        localStorageAdapter.removeItem(`${storageScope}:${key}`),
+    }),
+    [storageScope]
+  );
   const remotePosition = useQuery(
     api.positions.get,
     convexId ? { audiobookId: convexId as Id<"audiobooks"> } : "skip"
@@ -199,8 +212,8 @@ export function Player({
     };
 
     const engine = new SyncEngine(
-      syncStorageKey,
-      localStorageAdapter,
+      syncIdentity,
+      scopedStorageAdapter,
       pushFn,
       onRemoteNewer,
     );
@@ -229,7 +242,7 @@ export function Player({
       engine.destroy();
       syncEngineRef.current = null;
     };
-  }, [convexId, updatePosition, book.name, book.checksum, syncStorageKey]);
+  }, [convexId, scopedStorageAdapter, syncIdentity, updatePosition]);
 
   const handlePositionUpdate = useCallback(
     (chapterIndex: number, positionMs: number) => {

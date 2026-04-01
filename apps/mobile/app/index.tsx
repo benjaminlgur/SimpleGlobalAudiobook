@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { useColorScheme } from "nativewind";
 import { SetupScreen } from "../components/SetupScreen";
+import { HOSTED_CONVEX_URL } from "../lib/runtimeConfig";
 
 export default function IndexScreen() {
-  const { convexUrl, setConvexUrl } = useConvexContext();
+  const { convexUrl, setSelfHostedUrl, setHostedMode } = useConvexContext();
   const { colorScheme } = useColorScheme();
   const [mounted, setMounted] = useState(false);
 
@@ -23,5 +24,10 @@ export default function IndexScreen() {
     return <Redirect href="/library" />;
   }
 
-  return <SetupScreen onConnect={setConvexUrl} />;
+  return (
+    <SetupScreen
+      onSelfHostedConnect={setSelfHostedUrl}
+      onHostedConnect={HOSTED_CONVEX_URL ? setHostedMode : undefined}
+    />
+  );
 }
