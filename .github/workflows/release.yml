@@ -28,6 +28,8 @@ jobs:
 
   build-desktop:
     needs: create-release
+    env:
+      HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -70,10 +72,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Validate hosted production URL
+        shell: bash
+        run: |
+          if [ -z "$HOSTED_CONVEX_URL" ]; then
+            echo "Missing GitHub Actions variable HOSTED_CONVEX_URL"
+            echo "Set it to your production hosted Convex URL, for example:"
+            echo "https://effervescent-squid.convex.cloud"
+            exit 1
+          fi
+
       - name: Build desktop app
         uses: tauri-apps/tauri-action@action-v0.5.25
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.release_id }}
@@ -87,6 +100,8 @@ jobs:
   build-android:
     needs: create-release
     runs-on: ubuntu-latest
+    env:
+      HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,12 +128,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Validate hosted production URL
+        shell: bash
+        run: |
+          if [ -z "$HOSTED_CONVEX_URL" ]; then
+            echo "Missing GitHub Actions variable HOSTED_CONVEX_URL"
+            echo "Set it to your production hosted Convex URL, for example:"
+            echo "https://effervescent-squid.convex.cloud"
+            exit 1
+          fi
+
       - name: Generate native Android project
         working-directory: apps/mobile
+        env:
+          EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
         run: npx expo prebuild --platform android --clean
 
       - name: Build release APK
         working-directory: apps/mobile/android
+        env:
+          EXPO_PUBLIC_HOSTED_CONVEX_URL: ${{ env.HOSTED_CONVEX_URL }}
         run: ./gradlew assembleRelease
 
       - name: Rename APK
