@@ -331,6 +331,8 @@ export function useAudioPlayer(
       if (prevIdx >= 0) {
         loadChapter(prevIdx, 0);
         onChapterChange?.(prevIdx);
+      } else if (stateRef.current.currentChapterIndex === 0) {
+        loadChapter(0, 0);
       }
     }, [loadChapter, onChapterChange]),
 

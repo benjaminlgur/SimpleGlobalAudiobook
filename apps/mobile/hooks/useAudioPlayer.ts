@@ -351,8 +351,16 @@ export function useMobileAudioPlayer(
           const ch = chapters[prevIdx];
           await TrackPlayer.seekTo((ch.startMs || 0) / 1000);
           onChapterChange?.(prevIdx);
+        } else if (virtualIdxRef.current === 0) {
+          const firstChapter = chapters[0];
+          await TrackPlayer.seekTo((firstChapter?.startMs || 0) / 1000);
         }
       } else {
+        const currentTrack = await TrackPlayer.getCurrentTrack();
+        if (currentTrack === 0) {
+          await TrackPlayer.seekTo(0);
+          return;
+        }
         try {
           await TrackPlayer.skipToPrevious();
         } catch {
