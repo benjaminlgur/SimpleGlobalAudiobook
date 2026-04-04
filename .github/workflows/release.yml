@@ -26,8 +26,43 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  deploy-backend-prod:
+    runs-on: ubuntu-latest
+    env:
+      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Validate Convex production deploy key
+        shell: bash
+        run: |
+          if [ -z "$CONVEX_DEPLOY_KEY" ]; then
+            echo "Missing GitHub Actions secret CONVEX_DEPLOY_KEY_PROD"
+            echo "Create a production deploy key for the hosted Convex project and store it as this secret."
+            exit 1
+          fi
+
+      - name: Deploy Convex backend to production
+        run: npx convex deploy
+
   build-desktop:
-    needs: create-release
+    needs:
+      - create-release
+      - deploy-backend-prod
     env:
       HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
     strategy:
@@ -78,7 +113,7 @@ jobs:
           if [ -z "$HOSTED_CONVEX_URL" ]; then
             echo "Missing GitHub Actions variable HOSTED_CONVEX_URL"
             echo "Set it to your production hosted Convex URL, for example:"
-            echo "https://effervescent-squid.convex.cloud"
+            echo "https://effervescent-squid-842.convex.cloud"
             exit 1
           fi
 
@@ -98,7 +133,9 @@ jobs:
           args: ${{ matrix.args }}
 
   build-android:
-    needs: create-release
+    needs:
+      - create-release
+      - deploy-backend-prod
     runs-on: ubuntu-latest
     env:
       HOSTED_CONVEX_URL: ${{ vars.HOSTED_CONVEX_URL }}
@@ -134,7 +171,7 @@ jobs:
           if [ -z "$HOSTED_CONVEX_URL" ]; then
             echo "Missing GitHub Actions variable HOSTED_CONVEX_URL"
             echo "Set it to your production hosted Convex URL, for example:"
-            echo "https://effervescent-squid.convex.cloud"
+            echo "https://effervescent-squid-842.convex.cloud"
             exit 1
           fi
 
