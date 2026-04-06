@@ -9,7 +9,7 @@ import {
   RefreshControl,
   Image,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -297,54 +297,69 @@ export default function LibraryScreen() {
   );
   const remoteOnlyCount = remoteOnlyBooks?.length ?? 0;
 
+  const reloadLibraryState = useCallback(async () => {
+    if (!libraryStorageKey || !deviceStorageKey || !storageScope) {
+      setDeviceId(null);
+      setLibrary([]);
+      setLinkingBook(null);
+      setStorageReady(false);
+      return;
+    }
+
+    setStorageReady(false);
+    setLinkingBook(null);
+
+    const nextDeviceId = await getOrCreateScopedDeviceId(
+      deviceStorageKey,
+      storageScope,
+      legacyDeviceKey,
+    );
+    const books = await loadScopedLibrary(
+      libraryStorageKey,
+      storageScope,
+      legacyLibraryKey,
+    );
+    const validated = await Promise.all(
+      books.map(async (book) => {
+        try {
+          const firstUri = book.folderPath.split("|")[0];
+          const info = await FileSystem.getInfoAsync(firstUri);
+          return { ...book, missing: !info.exists };
+        } catch {
+          return { ...book, missing: true };
+        }
+      }),
+    );
+
+    setDeviceId(nextDeviceId);
+    setLibrary(validated);
+    setStorageReady(true);
+  }, [
+    deviceStorageKey,
+    legacyDeviceKey,
+    legacyLibraryKey,
+    libraryStorageKey,
+    storageScope,
+  ]);
+
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      if (!libraryStorageKey || !deviceStorageKey || !storageScope) {
-        setDeviceId(null);
-        setLibrary([]);
-        setLinkingBook(null);
-        setStorageReady(false);
-        return;
-      }
-
-      setStorageReady(false);
-      setLinkingBook(null);
-
-      const nextDeviceId = await getOrCreateScopedDeviceId(
-        deviceStorageKey,
-        storageScope,
-        legacyDeviceKey,
-      );
-      const books = await loadScopedLibrary(
-        libraryStorageKey,
-        storageScope,
-        legacyLibraryKey,
-      );
-      const validated = await Promise.all(
-        books.map(async (book) => {
-          try {
-            const firstUri = book.folderPath.split("|")[0];
-            const info = await FileSystem.getInfoAsync(firstUri);
-            return { ...book, missing: !info.exists };
-          } catch {
-            return { ...book, missing: true };
-          }
-        }),
-      );
-
+      await reloadLibraryState();
       if (cancelled) return;
-
-      setDeviceId(nextDeviceId);
-      setLibrary(validated);
-      setStorageReady(true);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [deviceStorageKey, legacyDeviceKey, legacyLibraryKey, libraryStorageKey]);
+  }, [reloadLibraryState]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void reloadLibraryState();
+    }, [reloadLibraryState]),
+  );
 
   const saveLibrary = useCallback(async (books: LocalAudiobook[]) => {
     setLibrary(books);
@@ -699,10 +714,11 @@ export default function LibraryScreen() {
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
+    await reloadLibraryState();
     setRefreshToken((prev) => prev + 1);
     await new Promise((resolve) => setTimeout(resolve, 500));
     setIsRefreshing(false);
-  }, []);
+  }, [reloadLibraryState]);
 
   if (!storageScope || !storageReady || !deviceId) {
     return (

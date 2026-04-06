@@ -32,6 +32,7 @@ import { getScopedStorageKey } from "../lib/storageScope";
 import { useTheme } from "../hooks/useTheme";
 
 const LIBRARY_KEY = "audiobook_library";
+const DEVICE_ID_KEY = "audiobook_device_id";
 const LAST_PLAYING_BOOK_KEY = "audiobook_last_playing_book_key";
 const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 const PROGRESS_THUMB_SIZE = 16;
@@ -181,13 +182,18 @@ export default function PlayerScreen() {
   const lateRemoteAppliedRef = useRef(false);
   const updatePosition = useMutation(api.positions.update);
   const getOrCreate = useMutation(api.audiobooks.getOrCreate);
+  const registerOnDevice = useMutation(api.audiobooks.registerOnDevice);
   const libraryStorageKey = storageScope
     ? getScopedStorageKey(LIBRARY_KEY, storageScope)
+    : null;
+  const deviceStorageKey = storageScope
+    ? getScopedStorageKey(DEVICE_ID_KEY, storageScope)
     : null;
   const lastPlayingStorageKey = storageScope
     ? getScopedStorageKey(LAST_PLAYING_BOOK_KEY, storageScope)
     : null;
   const legacyLibraryKey = mode === "self-hosted" ? LIBRARY_KEY : undefined;
+  const legacyDeviceKey = mode === "self-hosted" ? DEVICE_ID_KEY : undefined;
   const legacyLastPlayingKey =
     mode === "self-hosted" ? LAST_PLAYING_BOOK_KEY : undefined;
 
@@ -309,6 +315,56 @@ export default function PlayerScreen() {
     setLocalInitResolved(false);
   }, [syncIdentity]);
 
+  const persistResolvedConvexId = useCallback(
+    async (resolvedConvexId: string) => {
+      if (!book || !libraryStorageKey || !storageScope) {
+        return;
+      }
+
+      const library = await loadScopedLibrary(
+        libraryStorageKey,
+        storageScope,
+        legacyLibraryKey,
+      );
+      const updatedLibrary = library.map((entry) =>
+        entry.name === book.name && entry.checksum === book.checksum
+          ? { ...entry, convexId: resolvedConvexId }
+          : entry,
+      );
+      await AsyncStorage.setItem(
+        libraryStorageKey,
+        JSON.stringify(updatedLibrary),
+      );
+
+      const deviceId =
+        (deviceStorageKey
+          ? await AsyncStorage.getItem(deviceStorageKey)
+          : null) ||
+        (legacyDeviceKey ? await AsyncStorage.getItem(legacyDeviceKey) : null);
+
+      if (deviceId) {
+        try {
+          await registerOnDevice({
+            audiobookId: resolvedConvexId as Id<"audiobooks">,
+            deviceId,
+            platform: "mobile",
+          });
+        } catch {
+          // Best effort while offline.
+        }
+      }
+    },
+    [
+      book,
+      deviceStorageKey,
+      legacyDeviceKey,
+      legacyLibraryKey,
+      libraryStorageKey,
+      registerOnDevice,
+      storageScope,
+    ],
+  );
+
   // Resolve Convex ID
   useEffect(() => {
     if (!book || convexId) return;
@@ -319,6 +375,7 @@ export default function PlayerScreen() {
           checksum: book.checksum,
           chapters: book.chapters,
         });
+        await persistResolvedConvexId(result.audiobookId);
         setBook((prev) =>
           prev ? { ...prev, convexId: result.audiobookId } : prev,
         );
@@ -326,7 +383,7 @@ export default function PlayerScreen() {
         // Offline
       }
     })();
-  }, [book, convexId, getOrCreate]);
+  }, [book, convexId, getOrCreate, persistResolvedConvexId]);
 
   // Prefer remote position when it arrives — dismiss offline prompt if showing.
   useEffect(() => {
