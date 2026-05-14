@@ -105,6 +105,49 @@ export function Settings({ onBack, onDisconnect }: SettingsProps) {
           </div>
         </section>
 
+        <section className="mb-8">
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            Support
+          </h2>
+          <a
+            href="https://www.buymeacoffee.com/benjaminlgur"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex w-full items-center gap-3 rounded-lg border border-[#FFDD00]/40 bg-[#FFDD00] px-4 py-3 text-sm font-semibold text-[#0D0C22] shadow-sm hover:bg-[#FFE633] hover:border-[#FFDD00] transition-colors"
+          >
+            <svg
+              className="h-5 w-5 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M17 8h1a3 3 0 0 1 0 6h-1" />
+              <path d="M3 8h14v7a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V8Z" />
+              <path d="M7 4v2" />
+              <path d="M11 4v2" />
+              <path d="M15 4v2" />
+            </svg>
+            <span className="flex-1 text-left">Buy me a coffee</span>
+            <svg
+              className="h-4 w-4 opacity-60 group-hover:opacity-100 transition-opacity"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H18m0 0v4.5M18 6 6 18" />
+            </svg>
+          </a>
+          <p className="text-xs text-muted-foreground mt-2">
+            If you enjoy this app, you can support its development.
+          </p>
+        </section>
+
         <section>
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">
             {isHosted ? "Account" : "Connection"}

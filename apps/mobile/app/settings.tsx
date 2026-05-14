@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity } from "react-native";
+import { View, Text, TouchableOpacity, Linking } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuthActions } from "@convex-dev/auth/react";
@@ -120,6 +120,27 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             ))}
           </View>
+
+          <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
+            Support
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              void Linking.openURL("https://www.buymeacoffee.com/benjaminlgur");
+            }}
+            activeOpacity={0.85}
+            className="flex-row items-center rounded-xl px-4 py-3.5"
+            style={{ backgroundColor: "#FFDD00" }}
+          >
+            <Ionicons name="cafe-outline" size={20} color="#0D0C22" />
+            <Text className="flex-1 ml-3 text-sm font-semibold" style={{ color: "#0D0C22" }}>
+              Buy me a coffee
+            </Text>
+            <Ionicons name="open-outline" size={16} color="#0D0C22" />
+          </TouchableOpacity>
+          <Text className="text-xs text-gray-400 dark:text-gray-500 mt-2 mb-8">
+            If you enjoy this app, you can support its development.
+          </Text>
 
           <Text className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
             {isHosted ? "Account" : "Connection"}
